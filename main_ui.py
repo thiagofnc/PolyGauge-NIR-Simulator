@@ -248,6 +248,8 @@ class WebGaugingApp(ctk.CTk):
 
         ctk.CTkButton(self.data_panel, text="UPDATE SIMULATION", command=self.run_live_simulation, 
                       fg_color="#00aa00", hover_color="#008800", font=("Arial", 16, "bold"), height=40).pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(self.data_panel, text="CHANNEL MATRIX", command=self.show_channel_matrix,
+                      fg_color="#0055aa", hover_color="#0077cc", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
 
     # --- UI Builders ---
 
@@ -309,6 +311,41 @@ class WebGaugingApp(ctk.CTk):
     def remove_element(self, frame, target_list):
         frame.destroy()
         target_list[:] = [item for item in target_list if item["frame"] != frame]
+
+    def get_source_spectra(self):
+        if self.source_type_var.get() == "Blackbody (Halogen)":
+            try:
+                temp = float(self.source_temp_var.get())
+            except ValueError:
+                temp = 3000
+            return blackbody_spectrum(self.wl, temp)
+
+        return np.ones_like(self.wl)
+
+    def get_sensor_spectra(self, sensor_type):
+        if sensor_type == "InGaAs":
+            return ingaas_responsivity(self.wl)
+        if sensor_type == "MCT (MIR)":
+            return mct_responsivity(self.wl)
+        return np.ones_like(self.wl)
+
+    def get_channel_definitions(self):
+        channels = []
+        for ch in self.sensor_channels:
+            try:
+                center = float(ch["center_var"].get())
+                width = float(ch["width_var"].get())
+            except ValueError:
+                continue
+
+            channels.append({
+                "name": ch["name_var"].get(),
+                "center": center,
+                "width": width,
+                "sensor_type": ch["sensor_type_var"].get(),
+            })
+
+        return channels
 
     # --- Pop-up Viewer ---
 
@@ -528,15 +565,124 @@ class WebGaugingApp(ctk.CTk):
         canvas.mpl_connect("button_press_event", on_click)
         canvas.draw()
 
+    def show_channel_matrix(self):
+        """Shows effective absorption coefficients for the current channels."""
+        channels = self.get_channel_definitions()
+        materials = [name for name in self.material_library.keys() if name != "Air"]
+
+        if not channels:
+            return
+
+        source_spectra = self.get_source_spectra()
+        matrix = np.zeros((len(channels), len(materials)), dtype=float)
+        channel_weights = []
+
+        for row_idx, channel in enumerate(channels):
+            filter_spectra = gaussian_peak(self.wl, channel["center"], channel["width"], 1.0)
+            sensor_spectra = self.get_sensor_spectra(channel["sensor_type"])
+            weight = source_spectra * filter_spectra * sensor_spectra
+            weight_area = np.trapezoid(weight, self.wl)
+            channel_weights.append(weight_area)
+
+            for col_idx, material in enumerate(materials):
+                alpha = np.asarray(self.material_library[material]["alpha"], dtype=float)
+                if weight_area > 0:
+                    matrix[row_idx, col_idx] = np.trapezoid(weight * alpha, self.wl) / weight_area
+                else:
+                    matrix[row_idx, col_idx] = 0.0
+
+        singular_values = np.linalg.svd(matrix, compute_uv=False)
+        nonzero_singular_values = singular_values[singular_values > 1e-12]
+        rank = int(np.linalg.matrix_rank(matrix, tol=1e-9))
+        if len(nonzero_singular_values) >= 2:
+            condition = nonzero_singular_values[0] / nonzero_singular_values[-1]
+        elif len(nonzero_singular_values) == 1:
+            condition = float("inf")
+        else:
+            condition = float("inf")
+
+        popup = ctk.CTkToplevel(self)
+        popup.title("Channel Matrix")
+        popup.geometry("1100x760")
+        popup.attributes("-topmost", True)
+
+        header = ctk.CTkLabel(
+            popup,
+            text="Effective alpha matrix: rows are sensor/filter channels, columns are materials",
+            font=("Arial", 16, "bold"),
+        )
+        header.pack(pady=(10, 4))
+
+        summary_text = (
+            f"Channels: {len(channels)}    Materials: {len(materials)}    "
+            f"Rank: {rank}    Condition: {condition:.3g}"
+        )
+        ctk.CTkLabel(popup, text=summary_text).pack(pady=(0, 8))
+
+        fig, ax = plt.subplots(figsize=(8, 4.8), facecolor='#2b2b2b')
+        ax.set_facecolor('#2b2b2b')
+
+        if np.nanmax(matrix) > 0:
+            display_matrix = np.log10(matrix + 1e-9)
+            image_label = "log10(effective alpha + 1e-9)"
+        else:
+            display_matrix = matrix
+            image_label = "effective alpha"
+
+        im = ax.imshow(display_matrix, aspect="auto", cmap="viridis")
+        ax.set_title(image_label, color="white")
+        ax.set_xticks(np.arange(len(materials)))
+        ax.set_yticks(np.arange(len(channels)))
+        ax.set_xticklabels(materials, color="white")
+        ax.set_yticklabels([f"{ch['name']} ({ch['center']:.0f} nm)" for ch in channels], color="white")
+        ax.tick_params(colors="white")
+        for spine in ax.spines.values():
+            spine.set_color("gray")
+
+        for row_idx in range(len(channels)):
+            for col_idx in range(len(materials)):
+                value = matrix[row_idx, col_idx]
+                ax.text(col_idx, row_idx, f"{value:.3g}", ha="center", va="center", color="white", fontsize=8)
+
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.ax.tick_params(colors="white")
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=popup)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=5)
+        canvas.draw()
+
+        table_lines = []
+        table_lines.append("Effective alpha values are in mm^-1.")
+        table_lines.append("Use absorbance A = -ln(signal/reference). Then approximately A = K * thickness.")
+        table_lines.append("")
+        table_lines.append("Channel".ljust(28) + "".join(material.rjust(14) for material in materials) + "    Weight")
+        for row_idx, channel in enumerate(channels):
+            name = f"{channel['name']} {channel['center']:.0f}nm"
+            values = "".join(f"{matrix[row_idx, col_idx]:14.5g}" for col_idx in range(len(materials)))
+            table_lines.append(name[:27].ljust(28) + values + f"    {channel_weights[row_idx]:.3g}")
+
+        table_lines.append("")
+        if len(channels) < len(materials):
+            table_lines.append("Warning: fewer channels than materials. Thickness solving is underdetermined.")
+        elif rank < len(materials):
+            table_lines.append("Warning: matrix is rank deficient. Some materials look too similar in these channels.")
+        elif condition > 100:
+            table_lines.append("Warning: high condition number. Small signal noise may cause large thickness errors.")
+        else:
+            table_lines.append("Matrix looks reasonably separable for these modeled curves.")
+
+        table_lines.append("Prefer columns that look different from each other; similar columns are hard to separate.")
+
+        text_box = ctk.CTkTextbox(popup, height=170, font=("Consolas", 12))
+        text_box.pack(fill="x", padx=10, pady=(5, 10))
+        text_box.insert("1.0", "\n".join(table_lines))
+        text_box.configure(state="disabled")
+
     # --- Core Physics Engine ---
 
     def run_live_simulation(self):
-        if self.source_type_var.get() == "Blackbody (Halogen)":
-            try: temp = float(self.source_temp_var.get())
-            except ValueError: temp = 3000
-            source_spectra = blackbody_spectrum(self.wl, temp)
-        else:
-            source_spectra = np.ones_like(self.wl)
+        source_spectra = self.get_source_spectra()
         
         T_bulk = np.ones_like(self.wl)
         for layer_data in self.web_layers:
@@ -571,13 +717,7 @@ class WebGaugingApp(ctk.CTk):
                 c_wl, fwhm = 2000, 10
             
             filter_spectra = gaussian_peak(self.wl, c_wl, fwhm, 1.0)
-            sensor_type = ch["sensor_type_var"].get()
-            if sensor_type == "InGaAs":
-                sensor_spectra = ingaas_responsivity(self.wl)
-            elif sensor_type == "MCT (MIR)":
-                sensor_spectra = mct_responsivity(self.wl)
-            else:
-                sensor_spectra = np.ones_like(self.wl)
+            sensor_spectra = self.get_sensor_spectra(ch["sensor_type_var"].get())
 
             channel_spectra = base_intensity * filter_spectra * sensor_spectra
             final_signal = np.trapezoid(channel_spectra, self.wl)

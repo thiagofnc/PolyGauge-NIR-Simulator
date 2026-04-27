@@ -1,11 +1,11 @@
 # PolyGauge NIR Simulator
 
-`PolyGauge NIR Simulator` is an early-stage Python project for modeling near-infrared transmission through multilayer plastic films and exploring how narrowband filtered detector channels respond to that stack.
+`PolyGauge NIR Simulator` is an early-stage Python project for modeling NIR/SWIR/MIR transmission through multilayer plastic films and exploring how narrowband filtered detector channels respond to that stack.
 
 Right now, the repository contains two main ways to work with the model:
 
 - A script-based simulation in `main.py` that builds a synthetic optical stack and runs a wavelength-by-wavelength calculation.
-- A desktop GUI in `main_ui.py` that lets you interactively vary source settings, material layers, and detector channels.
+- A desktop GUI in `main_ui.py` that lets you interactively vary source settings, material layers, detector channels, and channel-matrix designs.
 
 The project is clearly aimed at web gauging / film inspection workflows, especially polymer structures such as PE / EVOH / PE laminates or coextruded films.
 
@@ -17,7 +17,8 @@ This is a solid prototype with a clear structure:
 - The core numerical pipeline is isolated in `Simulation.py`
 - Data-loading logic exists in `DataLoader.py`
 - A usable CustomTkinter front end is present in `main_ui.py`
-- Real material data for polyethylene is bundled in the repo
+- Real optical-constant data for polyethylene and water is bundled in the repo
+- The GUI includes material curve comparison and channel-matrix tools for emitter/filter/sensor selection
 
 It is not yet a packaged library or production application, but it already demonstrates the core physics and user workflow.
 
@@ -39,6 +40,7 @@ That makes the project useful for questions like:
 - How does a reference channel compare against a measurement channel?
 - How does film stack design affect transmission?
 - How do source spectrum, filter placement, and detector response interact?
+- Can a set of channels mathematically separate PE, EVOH, Nylon, and water thicknesses?
 
 ## Repository Contents
 
@@ -163,6 +165,14 @@ The GUI currently provides:
 - live spectral plots
 - per-channel signal readouts
 - popup material spectral viewer
+- material absorbance overlay viewer
+- channel matrix viewer for checking whether the selected filters/sensors can separate material thicknesses
+
+The GUI wavelength axis currently spans `1000-4000 nm`, which covers common NIR polymer bands plus the `3.0-3.5 um` stretch region. The detector choices are approximate:
+
+- `InGaAs` for roughly `1500-2600 nm`
+- `MCT (MIR)` for roughly `2800-4000 nm`
+- `Ideal (Flat)` for exploratory calculations without detector cutoff
 
 Default startup configuration is already meaningful:
 
@@ -196,7 +206,7 @@ From the file contents, it includes tabulated:
 - refractive index `n`
 - extinction coefficient `k`
 
-The data appears to be used by the GUI to create a more realistic PE material instead of relying only on synthetic Gaussian peaks.
+The GUI uses this file above `2600 nm`, so the strong PE `~3400 nm` C-H stretch region is based on measured optical constants rather than a hand-placed Gaussian.
 
 ### `PE_n_data.txt`
 
@@ -205,7 +215,7 @@ This looks like a simpler two-column refractive index table for PE:
 - wavelength
 - `n`
 
-At the moment, the main GUI flow is using `PE_data.yml` directly, so this file appears to be auxiliary or legacy support data.
+At the moment, the main GUI flow uses `PE_data.yml` directly, so this file appears to be auxiliary or legacy support data.
 
 ### `Water_data.yml`
 
@@ -238,6 +248,49 @@ Useful sources:
 - Nylon 6 NIR studies in Journal of Molecular Structure and Vibrational Spectroscopy report crystalline/amorphous Nylon 6 bands around `1485-1535 nm`, N-H combination bands near `~2040 nm`, and CH2 combination features around `2300-2355 nm`.
 - PE NIR studies report CH2-related absorption around `1730-1764 nm` and strong hydrocarbon combination bands around `2300-2350 nm`.
 
+## Viewing Curves
+
+The GUI has two material-curve views:
+
+- Click the eye button on an individual layer to view that material's absorption and refractive-index curves.
+- Click `Compare Absorbance Curves` to overlay all material absorption curves.
+
+Both popups support clicking on the plot. A marker appears at the nearest sampled wavelength and reports the wavelength plus the absorption value. The comparison popup includes:
+
+- raw absorption coefficient curves in `mm^-1`
+- normalized curves so weaker bands can still be compared by shape and wavelength
+
+## Channel Matrix Workflow
+
+Thickness solving should be done in absorbance space:
+
+`A = -ln(signal / reference)`
+
+For narrow enough channels, each channel approximately follows:
+
+`A_channel = alpha_PE * d_PE + alpha_EVOH * d_EVOH + alpha_Nylon * d_Nylon + alpha_Water * d_Water`
+
+The GUI's `CHANNEL MATRIX` button estimates the effective `alpha` value for each material in each current sensor/filter channel by weighting the material absorption curve by:
+
+`source * filter * sensor`
+
+Rows are channels, columns are materials, and values are effective `alpha` in `mm^-1`.
+
+Use it to choose channels:
+
+- You need at least as many independent channels as unknown material thicknesses.
+- Similar columns mean two materials look alike to your selected channels and will be hard to separate.
+- A high condition number means small detector noise can create large thickness errors.
+- A zero or very low channel weight usually means the selected detector cannot see that wavelength range.
+
+Practical workflow:
+
+1. Add candidate sensor/filter channels in the left panel.
+2. Use `InGaAs` for NIR channels and `MCT (MIR)` for `3000-3400 nm` channels.
+3. Click `Compare Absorbance Curves` to inspect whether the chosen wavelengths sit on useful bands.
+4. Click `CHANNEL MATRIX` to see whether the chosen channel set separates the materials.
+5. Keep at least one reference or weak-absorption channel to normalize source/detector drift.
+
 ## Physics Model Included So Far
 
 The project already covers several useful pieces of optical modeling:
@@ -261,12 +314,14 @@ The repo currently mixes synthetic and real inputs.
 
 - halogen source modeled with Planck’s law approximation
 - InGaAs responsivity curve approximated with piecewise interpolation
-- several material absorption bands modeled as Gaussians
+- MCT responsivity curve approximated with piecewise interpolation
+- EVOH, Nylon, and some PE NIR absorption bands modeled as Gaussians
 - optical filter passbands modeled as Gaussian peaks
 
 ### Real / file-driven
 
-- polyethylene `n` and `k` data from `PE_data.yml`
+- polyethylene `n` and `k` data from `PE_data.yml` above `2600 nm`
+- liquid water `n` and `k` data from `Water_data.yml`
 
 That hybrid setup makes sense for a prototype: you get realistic structure where you have data, while keeping the rest fast to modify.
 
@@ -316,15 +371,18 @@ Expected behavior:
 - lets you add/remove channels
 - recalculates channel signals
 - updates plots of source/web transmission and filtered detector response
+- opens material curve and channel-matrix popups from the center/right panel buttons
 
 ## Suggested Workflow
 
 If you are developing this further, the most natural workflow is:
 
-1. Use `main.py` to validate the backend math and inspect spectra.
-2. Use `main_ui.py` to experiment with stack design and channel placement.
-3. Move shared physics into `Simulation.py` so both script and GUI use the same engine.
-4. Expand the material library with more real datasets.
+1. Use `Compare Absorbance Curves` to inspect candidate material bands.
+2. Add candidate filter/sensor channels in `main_ui.py`.
+3. Use `CHANNEL MATRIX` to check whether the selected channels can separate the unknown layer thicknesses.
+4. Use `main.py` to validate backend math and inspect spectra when interface/Fresnel effects matter.
+5. Move shared physics into `Simulation.py` so both script and GUI use the same engine.
+6. Expand the material library with measured datasets for EVOH, Nylon, and production PE grades.
 
 ## Known Limitations
 
@@ -336,6 +394,8 @@ This README should reflect the project honestly, so here are the main current li
 - There are no automated tests yet.
 - There is no packaging, CLI, or installer yet.
 - The material library is still small.
+- EVOH and Nylon absorption curves are modeled from band locations, not calibrated measured spectra.
+- PE below `2600 nm` is still modeled; PE above `2600 nm` and water are file-driven measured optical constants.
 - Some data parsing in the GUI is custom and separate from `DataLoader.py`, so data-loading logic is duplicated.
 - The project currently assumes relatively simple normal-incidence transmission and does not include scattering, angular effects, or instrument noise modeling.
 
@@ -351,8 +411,8 @@ If you keep building this project, the highest-value improvements would likely b
    - Fresnel boundaries
    - material interpolation
    - signal integration
-5. Expand the material library with real optical constants for more polymers and barrier layers.
-6. Add export features for spectra and channel results.
+5. Import measured EVOH and Nylon absorbance or optical-constant curves from known-thickness samples.
+6. Add export features for spectra, channel matrices, and channel results.
 7. Add calibration / regression tools to estimate thickness or composition from channel ratios.
 
 ## Why The New Name
@@ -372,7 +432,8 @@ So far, this project is a promising NIR film-transmission and web-gauging protot
 
 - a reusable simulation backend
 - an interactive GUI
-- a bundled PE dataset
+- bundled PE and water optical-constant datasets
+- curve-comparison and channel-matrix tools for emitter/filter/sensor selection
 - clear room to grow into a more serious engineering tool
 
 For where it is right now, the architecture is already pointing in a good direction.
