@@ -358,6 +358,46 @@ class WebGaugingApp(ctk.CTk):
         # Embed in Tkinter
         canvas = FigureCanvasTkAgg(fig, master=popup)
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+
+        marker_alpha, = ax_alpha.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
+        marker_n, = ax_n.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
+        annotation = ax_alpha.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(12, 12),
+            textcoords="offset points",
+            color="white",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
+            arrowprops=dict(arrowstyle="->", color="white"),
+        )
+        annotation.set_visible(False)
+
+        def on_click(event):
+            if event.xdata is None:
+                return
+
+            idx = int(np.argmin(np.abs(self.wl - event.xdata)))
+            x_val = self.wl[idx]
+
+            if event.inaxes == ax_n:
+                y_val = n_data[idx]
+                marker_n.set_data([x_val], [y_val])
+                marker_alpha.set_data([], [])
+                annotation.xy = (x_val, data["alpha"][idx])
+                annotation.set_text(f"{x_val:.0f} nm\nn: {y_val:.4g}")
+            elif event.inaxes == ax_alpha:
+                y_val = data["alpha"][idx]
+                marker_alpha.set_data([x_val], [y_val])
+                marker_n.set_data([], [])
+                annotation.xy = (x_val, y_val)
+                annotation.set_text(f"{x_val:.0f} nm\nalpha: {y_val:.4g} mm^-1")
+            else:
+                return
+
+            annotation.set_visible(True)
+            canvas.draw_idle()
+
+        canvas.mpl_connect("button_press_event", on_click)
         canvas.draw()
 
     def show_all_material_spectra(self):
@@ -384,17 +424,26 @@ class WebGaugingApp(ctk.CTk):
             for spine in ax.spines.values():
                 spine.set_color('gray')
 
+        plotted = []
         for mat_name, data in self.material_library.items():
             if mat_name == "Air":
                 continue
 
             alpha = np.asarray(data["alpha"], dtype=float)
             color = colors.get(mat_name, None)
-            ax_raw.plot(self.wl, alpha, label=mat_name, color=color, linewidth=1.8)
+            raw_line, = ax_raw.plot(self.wl, alpha, label=mat_name, color=color, linewidth=1.8)
 
             max_alpha = np.nanmax(alpha)
             if max_alpha > 0:
-                ax_norm.plot(self.wl, alpha / max_alpha, label=mat_name, color=color, linewidth=1.8)
+                norm_alpha = alpha / max_alpha
+                norm_line, = ax_norm.plot(self.wl, norm_alpha, label=mat_name, color=color, linewidth=1.8)
+                plotted.append({
+                    "name": mat_name,
+                    "raw": alpha,
+                    "norm": norm_alpha,
+                    "raw_line": raw_line,
+                    "norm_line": norm_line,
+                })
 
         ax_raw.set_title("Absorption Coefficient", color='white')
         ax_raw.set_ylabel("alpha (mm^-1)", color='white')
@@ -411,6 +460,71 @@ class WebGaugingApp(ctk.CTk):
 
         canvas = FigureCanvasTkAgg(fig, master=popup)
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+
+        raw_marker, = ax_raw.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
+        norm_marker, = ax_norm.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
+        raw_annotation = ax_raw.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(12, 12),
+            textcoords="offset points",
+            color="white",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
+            arrowprops=dict(arrowstyle="->", color="white"),
+        )
+        norm_annotation = ax_norm.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(12, 12),
+            textcoords="offset points",
+            color="white",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
+            arrowprops=dict(arrowstyle="->", color="white"),
+        )
+        raw_annotation.set_visible(False)
+        norm_annotation.set_visible(False)
+
+        def on_click(event):
+            if event.xdata is None or event.inaxes not in (ax_raw, ax_norm):
+                return
+
+            idx = int(np.argmin(np.abs(self.wl - event.xdata)))
+            x_val = self.wl[idx]
+            series_key = "raw" if event.inaxes == ax_raw else "norm"
+            click_xy = np.array([event.x, event.y])
+
+            nearest = None
+            nearest_distance = float("inf")
+            for item in plotted:
+                y_val = item[series_key][idx]
+                pixel_xy = event.inaxes.transData.transform((x_val, y_val))
+                distance = np.linalg.norm(pixel_xy - click_xy)
+                if distance < nearest_distance:
+                    nearest = item
+                    nearest_distance = distance
+
+            if nearest is None:
+                return
+
+            y_val = nearest[series_key][idx]
+            if event.inaxes == ax_raw:
+                raw_marker.set_data([x_val], [y_val])
+                norm_marker.set_data([], [])
+                raw_annotation.xy = (x_val, y_val)
+                raw_annotation.set_text(f"{nearest['name']}\n{x_val:.0f} nm\nalpha: {y_val:.4g} mm^-1")
+                raw_annotation.set_visible(True)
+                norm_annotation.set_visible(False)
+            else:
+                norm_marker.set_data([x_val], [y_val])
+                raw_marker.set_data([], [])
+                norm_annotation.xy = (x_val, y_val)
+                norm_annotation.set_text(f"{nearest['name']}\n{x_val:.0f} nm\nrelative: {y_val:.4g}")
+                norm_annotation.set_visible(True)
+                raw_annotation.set_visible(False)
+
+            canvas.draw_idle()
+
+        canvas.mpl_connect("button_press_event", on_click)
         canvas.draw()
 
     # --- Core Physics Engine ---
