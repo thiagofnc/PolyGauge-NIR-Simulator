@@ -228,7 +228,7 @@ Current modeled NIR bands:
 | --- | --- |
 | PE | `1210`, `1730`, `1764`, `2310`, `2350 nm`; measured optical constants above `2600 nm`, including the `~3400 nm` C-H stretch |
 | EVOH | `1410`, `2012`, `2092`, `2310 nm`; modeled O-H stretch region near `3000-3300 nm` |
-| Nylon | `1535`, `2040`, `2300`, `2355 nm`; modeled C-H/N-H stretch region near `2925-3030 nm` |
+| Nylon | `1535`, `2040`, `2300`, `2355 nm`; modeled N-H stretch near `3030 nm` and CH2 stretch near `3410-3500 nm` |
 | Water | measured `n,k`; prominent NIR absorption near `1450` and `1940 nm` |
 
 Useful sources:
