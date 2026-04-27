@@ -11,6 +11,10 @@ from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
 def gaussian_peak(wl, center, width, amplitude):
     return amplitude * np.exp(-((wl - center) ** 2) / (2 * width ** 2))
 
+def gaussian_bandpass(wl, center, fwhm, peak=1.0):
+    sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    return gaussian_peak(wl, center, sigma, peak)
+
 def band_model(wl, bands):
     """Build a simple absorption model from NIR band centers.
 
@@ -28,11 +32,23 @@ def blackbody_spectrum(wl_nm, temp_k):
     intensity = (2 * h * c**2 / wl_m**5) / (np.exp(h * c / (wl_m * k * temp_k)) - 1)
     return intensity / np.max(intensity)
 
+def bounded_blackbody_spectrum(wl_nm, temp_k, min_nm=None, max_nm=None):
+    spectrum = blackbody_spectrum(wl_nm, temp_k)
+    mask = np.ones_like(wl_nm, dtype=bool)
+    if min_nm is not None:
+        mask &= wl_nm >= min_nm
+    if max_nm is not None:
+        mask &= wl_nm <= max_nm
+    return np.where(mask, spectrum, 0.0)
+
 def ingaas_responsivity(wl):
     return np.maximum(np.interp(wl, [1500, 2000, 2300, 2500, 2600], [0.6, 0.9, 1.0, 0.8, 0.0]), 0)
 
 def mct_responsivity(wl):
     return np.maximum(np.interp(wl, [2500, 2800, 3200, 3800, 4100], [0.0, 0.8, 1.0, 0.9, 0.0]), 0)
+
+def inassb_responsivity(wl):
+    return np.maximum(np.interp(wl, [2600, 2700, 3300, 5000, 5300, 5400], [0.0, 0.75, 1.0, 0.95, 0.5, 0.0]), 0)
 
 def alpha_from_k(wl_nm, k):
     wl_mm = wl_nm * 1e-6
@@ -201,7 +217,12 @@ class WebGaugingApp(ctk.CTk):
         
         self.source_type_var = ctk.StringVar(value="Blackbody (Halogen)")
         ctk.CTkOptionMenu(self.source_frame, variable=self.source_type_var, 
-                          values=["Blackbody (Halogen)", "Flat Emission (Ideal)"]).pack(pady=5)
+                          values=[
+                              "Blackbody (Halogen)",
+                              "MTE6114W-WRC LED (1460nm)",
+                              "HPIR104 Thermal Emitter",
+                              "Flat Emission (Ideal)",
+                          ]).pack(pady=5)
         
         temp_frame = ctk.CTkFrame(self.source_frame, fg_color="transparent")
         temp_frame.pack(fill="x", pady=5)
@@ -284,7 +305,9 @@ class WebGaugingApp(ctk.CTk):
         name_var = ctk.StringVar(value=name)
         ctk.CTkEntry(row1, textvariable=name_var, width=100).pack(side="left")
         sensor_type_var = ctk.StringVar(value="InGaAs")
-        ctk.CTkOptionMenu(row1, variable=sensor_type_var, values=["InGaAs", "MCT (MIR)", "Ideal (Flat)"], width=90).pack(side="right")
+        ctk.CTkOptionMenu(row1, variable=sensor_type_var,
+                          values=["InGaAs", "InAsSb (2.7-5.3um)", "MCT (MIR)", "Ideal (Flat)"],
+                          width=130).pack(side="right")
 
         row2 = ctk.CTkFrame(frame, fg_color="transparent")
         row2.pack(fill="x", padx=5, pady=5)
@@ -313,18 +336,27 @@ class WebGaugingApp(ctk.CTk):
         target_list[:] = [item for item in target_list if item["frame"] != frame]
 
     def get_source_spectra(self):
-        if self.source_type_var.get() == "Blackbody (Halogen)":
+        source_type = self.source_type_var.get()
+        if source_type == "Blackbody (Halogen)":
             try:
                 temp = float(self.source_temp_var.get())
             except ValueError:
                 temp = 3000
             return blackbody_spectrum(self.wl, temp)
 
+        if source_type == "MTE6114W-WRC LED (1460nm)":
+            return gaussian_bandpass(self.wl, 1460, 103, 1.0)
+
+        if source_type == "HPIR104 Thermal Emitter":
+            return bounded_blackbody_spectrum(self.wl, 903.15, min_nm=2000, max_nm=11000)
+
         return np.ones_like(self.wl)
 
     def get_sensor_spectra(self, sensor_type):
         if sensor_type == "InGaAs":
             return ingaas_responsivity(self.wl)
+        if sensor_type == "InAsSb (2.7-5.3um)":
+            return inassb_responsivity(self.wl)
         if sensor_type == "MCT (MIR)":
             return mct_responsivity(self.wl)
         return np.ones_like(self.wl)
@@ -578,7 +610,7 @@ class WebGaugingApp(ctk.CTk):
         channel_weights = []
 
         for row_idx, channel in enumerate(channels):
-            filter_spectra = gaussian_peak(self.wl, channel["center"], channel["width"], 1.0)
+            filter_spectra = gaussian_bandpass(self.wl, channel["center"], channel["width"], 1.0)
             sensor_spectra = self.get_sensor_spectra(channel["sensor_type"])
             weight = source_spectra * filter_spectra * sensor_spectra
             weight_area = np.trapezoid(weight, self.wl)
@@ -716,7 +748,7 @@ class WebGaugingApp(ctk.CTk):
             except ValueError:
                 c_wl, fwhm = 2000, 10
             
-            filter_spectra = gaussian_peak(self.wl, c_wl, fwhm, 1.0)
+            filter_spectra = gaussian_bandpass(self.wl, c_wl, fwhm, 1.0)
             sensor_spectra = self.get_sensor_spectra(ch["sensor_type_var"].get())
 
             channel_spectra = base_intensity * filter_spectra * sensor_spectra

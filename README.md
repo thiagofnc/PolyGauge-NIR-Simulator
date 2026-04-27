@@ -171,8 +171,20 @@ The GUI currently provides:
 The GUI wavelength axis currently spans `1000-4000 nm`, which covers common NIR polymer bands plus the `3.0-3.5 um` stretch region. The detector choices are approximate:
 
 - `InGaAs` for roughly `1500-2600 nm`
+- `InAsSb (2.7-5.3um)` for MIR channels such as `3000` and `3400 nm`
 - `MCT (MIR)` for roughly `2800-4000 nm`
 - `Ideal (Flat)` for exploratory calculations without detector cutoff
+
+Component-backed source options include:
+
+- `MTE6114W-WRC LED (1460nm)`, modeled as a Gaussian source centered at `1460 nm` with `103 nm` spectral half-width from the Marktech 1460 nm emitter datasheet family.
+- `HPIR104 Thermal Emitter`, modeled as a `903 K` near-blackbody emitter over its specified `2-11 um` output range.
+
+For the filters in the current hardware shortlist, enter:
+
+- `PIRF-INBP3400 Type 1`: center `3400 nm`, FWHM `140 nm`
+- `Andover 3000.0 / 100.0 - 69350-B`: center `3000 nm`, FWHM `100 nm`
+- No discrete filter with the 1460 nm LED: use the LED source option and a channel centered near `1460 nm`; a FWHM around `103 nm` represents the LED spectral width.
 
 Default startup configuration is already meaningful:
 
@@ -286,7 +298,7 @@ Use it to choose channels:
 Practical workflow:
 
 1. Add candidate sensor/filter channels in the left panel.
-2. Use `InGaAs` for NIR channels and `MCT (MIR)` for `3000-3400 nm` channels.
+2. Use `InGaAs` for NIR channels and `InAsSb (2.7-5.3um)` or `MCT (MIR)` for `3000-3400 nm` channels.
 3. Click `Compare Absorbance Curves` to inspect whether the chosen wavelengths sit on useful bands.
 4. Click `CHANNEL MATRIX` to see whether the chosen channel set separates the materials.
 5. Keep at least one reference or weak-absorption channel to normalize source/detector drift.
