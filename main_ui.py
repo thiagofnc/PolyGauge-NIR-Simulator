@@ -11,6 +11,17 @@ from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
 def gaussian_peak(wl, center, width, amplitude):
     return amplitude * np.exp(-((wl - center) ** 2) / (2 * width ** 2))
 
+def band_model(wl, bands):
+    """Build a simple absorption model from NIR band centers.
+
+    Amplitudes are engineering-scale alpha values in mm^-1. They are intended
+    for comparing band placement and channel sensitivity, not for calibration.
+    """
+    alpha = np.zeros_like(wl, dtype=float)
+    for center, width, amplitude in bands:
+        alpha += gaussian_peak(wl, center, width, amplitude)
+    return alpha
+
 def blackbody_spectrum(wl_nm, temp_k):
     h, c, k = 6.626e-34, 3.0e8, 1.38e-23
     wl_m = wl_nm * 1e-9
@@ -19,6 +30,14 @@ def blackbody_spectrum(wl_nm, temp_k):
 
 def ingaas_responsivity(wl):
     return np.maximum(np.interp(wl, [1500, 2000, 2300, 2500, 2600], [0.6, 0.9, 1.0, 0.8, 0.0]), 0)
+
+def mct_responsivity(wl):
+    return np.maximum(np.interp(wl, [2500, 2800, 3200, 3800, 4100], [0.0, 0.8, 1.0, 0.9, 0.0]), 0)
+
+def alpha_from_k(wl_nm, k):
+    wl_mm = wl_nm * 1e-6
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return (4 * np.pi * k) / wl_mm
 
 
 import os
@@ -84,7 +103,7 @@ class WebGaugingApp(ctk.CTk):
         self.geometry("1400x850")
 
         # Master Data
-        self.wl = np.arange(2000, 4000, 1.0)
+        self.wl = np.arange(1000, 4001, 1.0)
         self.web_layers = []
         self.sensor_channels = []
         
@@ -94,27 +113,71 @@ class WebGaugingApp(ctk.CTk):
         #   --- Pre-loaded Material Library ---
         self.material_library = {
             "Air": {"alpha": np.zeros_like(self.wl), "n": 1.0},
-            "EVOH": {"alpha": gaussian_peak(self.wl, 1930, 30, 1.8) + gaussian_peak(self.wl, 2310, 25, 0.5), "n": 1.52},
-            "Nylon": {"alpha": gaussian_peak(self.wl, 1530, 25, 1.2) + gaussian_peak(self.wl, 2050, 30, 1.5), "n": 1.53}
+            # NIR engineering band models for absorbance-band comparison.
+            # See README "Material Data Notes" for source references.
+            "PE": {
+                "alpha": band_model(self.wl, [
+                    (1210, 35, 0.20),
+                    (1730, 24, 0.85),
+                    (1764, 24, 0.55),
+                    (2310, 32, 2.00),
+                    (2350, 32, 1.35),
+                ]),
+                "n": 1.51,
+            },
+            "EVOH": {
+                "alpha": band_model(self.wl, [
+                    (1410, 28, 0.45),
+                    (2012, 38, 0.90),
+                    (2092, 48, 1.80),
+                    (2310, 35, 0.45),
+                    (3000, 90, 18.0),
+                    (3305, 110, 12.0),
+                ]),
+                "n": 1.52,
+            },
+            "Nylon": {
+                "alpha": band_model(self.wl, [
+                    (1535, 30, 1.20),
+                    (2040, 42, 1.50),
+                    (2300, 35, 0.55),
+                    (2355, 35, 0.55),
+                    (2925, 70, 8.0),
+                    (3030, 75, 18.0),
+                ]),
+                "n": 1.53,
+            },
         }
 
-        # Load both n and k from your new file
-        # (Make sure to change the string to whatever you named the file!)
         pe_n, pe_k = load_database_file("PE_data.yml", self.wl)
-        
-        # Convert Extinction Coefficient (k) to Absorption (alpha) in mm^-1
         if pe_k is not None:
-            # self.wl is in nanometers. Multiply by 1e-6 to get millimeters
-            pe_alpha = (4 * np.pi * pe_k) / (self.wl * 1e-6)
-        else:
-            # Fallback to synthetic if k isn't found
-            pe_alpha = gaussian_peak(self.wl, 1730, 20, 0.5) + gaussian_peak(self.wl, 2310, 25, 2.0)
+            measured_region = self.wl >= 2600
+            pe_alpha = self.material_library["PE"]["alpha"].copy()
+            pe_alpha[measured_region] = alpha_from_k(self.wl, pe_k)[measured_region]
 
-        # Build the final PE material dictionary
-        self.material_library["PE"] = {
-            "alpha": pe_alpha,
-            "n": pe_n if pe_n is not None else 1.51 
-        }
+            pe_n_combined = np.full_like(self.wl, 1.51, dtype=float)
+            if pe_n is not None:
+                pe_n_combined[measured_region] = pe_n[measured_region]
+
+            self.material_library["PE"] = {
+                "alpha": pe_alpha,
+                "n": pe_n_combined,
+            }
+
+        water_n, water_k = load_database_file("Water_data.yml", self.wl)
+        if water_k is not None:
+            self.material_library["Water"] = {
+                "alpha": alpha_from_k(self.wl, water_k),
+                "n": water_n if water_n is not None else 1.33,
+            }
+        else:
+            self.material_library["Water"] = {
+                "alpha": band_model(self.wl, [
+                    (1450, 55, 12.0),
+                    (1940, 70, 40.0),
+                ]),
+                "n": 1.33,
+            }
 
         self.setup_ui()
         self.run_live_simulation()
@@ -165,6 +228,8 @@ class WebGaugingApp(ctk.CTk):
         self.layers_container.pack(fill="both", expand=True, padx=5, pady=5)
         
         ctk.CTkButton(self.stack_panel, text="+ Add Layer", command=self.add_layer_ui).pack(pady=10)
+        ctk.CTkButton(self.stack_panel, text="Compare Absorbance Curves",
+                      command=self.show_all_material_spectra).pack(pady=(0, 10))
         
         self.add_layer_ui(mat="PE", thick="0.05")
         self.add_layer_ui(mat="EVOH", thick="0.015")
@@ -216,7 +281,7 @@ class WebGaugingApp(ctk.CTk):
         name_var = ctk.StringVar(value=name)
         ctk.CTkEntry(row1, textvariable=name_var, width=100).pack(side="left")
         sensor_type_var = ctk.StringVar(value="InGaAs")
-        ctk.CTkOptionMenu(row1, variable=sensor_type_var, values=["InGaAs", "Ideal (Flat)"], width=90).pack(side="right")
+        ctk.CTkOptionMenu(row1, variable=sensor_type_var, values=["InGaAs", "MCT (MIR)", "Ideal (Flat)"], width=90).pack(side="right")
 
         row2 = ctk.CTkFrame(frame, fg_color="transparent")
         row2.pack(fill="x", padx=5, pady=5)
@@ -295,6 +360,59 @@ class WebGaugingApp(ctk.CTk):
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
         canvas.draw()
 
+    def show_all_material_spectra(self):
+        """Shows all material absorption curves in one popup."""
+        popup = ctk.CTkToplevel(self)
+        popup.title("Material Absorbance Comparison")
+        popup.geometry("900x650")
+        popup.attributes("-topmost", True)
+
+        fig, (ax_raw, ax_norm) = plt.subplots(2, 1, figsize=(9, 6), facecolor='#2b2b2b', sharex=True)
+
+        colors = {
+            "PE": "#00ffcc",
+            "EVOH": "#ffcc00",
+            "Nylon": "#cc33ff",
+            "Water": "#33ccff",
+            "Air": "#888888",
+        }
+
+        for ax in (ax_raw, ax_norm):
+            ax.set_facecolor('#2b2b2b')
+            ax.tick_params(colors='white')
+            ax.grid(True, alpha=0.2)
+            for spine in ax.spines.values():
+                spine.set_color('gray')
+
+        for mat_name, data in self.material_library.items():
+            if mat_name == "Air":
+                continue
+
+            alpha = np.asarray(data["alpha"], dtype=float)
+            color = colors.get(mat_name, None)
+            ax_raw.plot(self.wl, alpha, label=mat_name, color=color, linewidth=1.8)
+
+            max_alpha = np.nanmax(alpha)
+            if max_alpha > 0:
+                ax_norm.plot(self.wl, alpha / max_alpha, label=mat_name, color=color, linewidth=1.8)
+
+        ax_raw.set_title("Absorption Coefficient", color='white')
+        ax_raw.set_ylabel("alpha (mm^-1)", color='white')
+        ax_raw.set_yscale("symlog", linthresh=0.01)
+
+        ax_norm.set_title("Normalized Band Shapes", color='white')
+        ax_norm.set_xlabel("Wavelength (nm)", color='white')
+        ax_norm.set_ylabel("Relative alpha", color='white')
+
+        for ax in (ax_raw, ax_norm):
+            ax.legend(facecolor='#333333', edgecolor='white', labelcolor='white', loc='upper right')
+
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=popup)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+        canvas.draw()
+
     # --- Core Physics Engine ---
 
     def run_live_simulation(self):
@@ -338,10 +456,16 @@ class WebGaugingApp(ctk.CTk):
                 c_wl, fwhm = 2000, 10
             
             filter_spectra = gaussian_peak(self.wl, c_wl, fwhm, 1.0)
-            sensor_spectra = ingaas_responsivity(self.wl) if ch["sensor_type_var"].get() == "InGaAs" else np.ones_like(self.wl)
+            sensor_type = ch["sensor_type_var"].get()
+            if sensor_type == "InGaAs":
+                sensor_spectra = ingaas_responsivity(self.wl)
+            elif sensor_type == "MCT (MIR)":
+                sensor_spectra = mct_responsivity(self.wl)
+            else:
+                sensor_spectra = np.ones_like(self.wl)
 
             channel_spectra = base_intensity * filter_spectra * sensor_spectra
-            final_signal = np.trapz(channel_spectra, self.wl)
+            final_signal = np.trapezoid(channel_spectra, self.wl)
             
             ch["lbl_readout"].configure(text=f"Signal: {final_signal:.2f}")
 

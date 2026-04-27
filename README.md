@@ -207,6 +207,37 @@ This looks like a simpler two-column refractive index table for PE:
 
 At the moment, the main GUI flow is using `PE_data.yml` directly, so this file appears to be auxiliary or legacy support data.
 
+### `Water_data.yml`
+
+This is liquid-water optical-constant data from the refractiveindex.info database, based on Hale and Querry's 25 C water `n,k` table from 0.2-200 micrometers.
+
+The GUI converts `k` to absorption coefficient `alpha` in `mm^-1`, the same internal unit used by the rest of the simulator.
+
+## Material Data Notes
+
+The GUI material library is set up for NIR/SWIR/MIR absorbance-band comparison over `1000-4000 nm`.
+
+- `Water` uses measured `n,k` data from `Water_data.yml` when that file is present. Its strong NIR bands are near `1450 nm` and `1940 nm`, so water layers should usually be modeled as very thin layers, often microns rather than tenths of a millimeter.
+- `PE` uses engineering-scale Gaussian bands from `1000-2600 nm`, then switches to measured `n,k` data from `PE_data.yml` above `2600 nm`. That means the strong `~3400 nm` PE band is a real curve from optical constants, not just a guessed point.
+- `EVOH` and `Nylon` currently use engineering-scale Gaussian band models. The band centers are sourced from NIR/IR spectroscopy literature, but the amplitudes are not calibrated extinction coefficients. Use them to compare band placement and channel sensitivity, not to infer absolute thickness.
+- Channels above about `2600 nm` need the `MCT (MIR)` or `Ideal (Flat)` detector selection; the default `InGaAs` response intentionally cuts off in that region.
+
+Current modeled NIR bands:
+
+| Material | Main modeled bands |
+| --- | --- |
+| PE | `1210`, `1730`, `1764`, `2310`, `2350 nm`; measured optical constants above `2600 nm`, including the `~3400 nm` C-H stretch |
+| EVOH | `1410`, `2012`, `2092`, `2310 nm`; modeled O-H stretch region near `3000-3300 nm` |
+| Nylon | `1535`, `2040`, `2300`, `2355 nm`; modeled C-H/N-H stretch region near `2925-3030 nm` |
+| Water | measured `n,k`; prominent NIR absorption near `1450` and `1940 nm` |
+
+Useful sources:
+
+- Hale and Querry, "Optical constants of water in the 200-nm to 200-um wavelength region," Applied Optics 12, 555-563 (1973), via refractiveindex.info.
+- Iwamoto et al., "FT-NIR Spectroscopic Study of OH Groups in Ethylene-Vinyl Alcohol Copolymer," Applied Spectroscopy 55, 864-870 (2001).
+- Nylon 6 NIR studies in Journal of Molecular Structure and Vibrational Spectroscopy report crystalline/amorphous Nylon 6 bands around `1485-1535 nm`, N-H combination bands near `~2040 nm`, and CH2 combination features around `2300-2355 nm`.
+- PE NIR studies report CH2-related absorption around `1730-1764 nm` and strong hydrocarbon combination bands around `2300-2350 nm`.
+
 ## Physics Model Included So Far
 
 The project already covers several useful pieces of optical modeling:
