@@ -235,8 +235,15 @@ class WebGaugingApp(ctk.CTk):
         
         ctk.CTkButton(self.left_panel, text="+ Add Sensor Channel", command=self.add_sensor_ui).pack(pady=10)
         
-        self.add_sensor_ui(center="2310", width="15", name="Measure (PE)")
-        self.add_sensor_ui(center="2200", width="15", name="Reference")
+        # --- NEW 8-CHANNEL DEFAULT FILTER CONFIGURATION ---
+        self.add_sensor_ui(center="1064", width="10", name="Ref A (Thorlabs FL1064-10)")
+        self.add_sensor_ui(center="1625", width="12", name="Ref B (Thorlabs FB1625-12)")
+        self.add_sensor_ui(center="1450", width="12", name="Water Primary (Thorlabs FBH1450-12)")
+        self.add_sensor_ui(center="1535", width="6", name="Nylon Primary (Syron BP1535-6)")
+        self.add_sensor_ui(center="1400", width="12", name="EVOH Primary (Thorlabs FB1400-12)")
+        self.add_sensor_ui(center="2100", width="12", name="EVOH Secondary (Thorlabs FB2100-12)")
+        self.add_sensor_ui(center="1750", width="12", name="PE Primary (Thorlabs FB1750-12)")
+        self.add_sensor_ui(center="1200", width="10", name="PE Secondary (Thorlabs FB1200-10)")
 
         # ==========================================
         # PANEL 2: WEB STACK (Center)
@@ -252,9 +259,11 @@ class WebGaugingApp(ctk.CTk):
         ctk.CTkButton(self.stack_panel, text="Compare Absorbance Curves",
                       command=self.show_all_material_spectra).pack(pady=(0, 10))
         
+
         self.add_layer_ui(mat="PE", thick="0.05")
         self.add_layer_ui(mat="EVOH", thick="0.015")
-        self.add_layer_ui(mat="PE", thick="0.05")
+        self.add_layer_ui(mat="Nylon", thick="0.02")
+        self.add_layer_ui(mat="Water", thick="0.005")
 
         # ==========================================
         # PANEL 3: GRAPH & GLOBAL CONTROLS (Right)
