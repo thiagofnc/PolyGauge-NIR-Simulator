@@ -6,6 +6,7 @@ import os
 
 # Import the backend components
 from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
+from Simulation import run_simulation
 
 # --- Physics & Data Helpers ---
 def gaussian_peak(wl, center, width, amplitude):
@@ -56,8 +57,6 @@ def alpha_from_k(wl_nm, k):
         return (4 * np.pi * k) / wl_mm
 
 
-import os
-import numpy as np
 
 def load_database_file(filepath, master_wl):
     """
@@ -714,32 +713,48 @@ class WebGaugingApp(ctk.CTk):
     # --- Core Physics Engine ---
 
     def run_live_simulation(self):
+        # 1. Prepare the Source Object
         source_spectra = self.get_source_spectra()
-        
-        T_bulk = np.ones_like(self.wl)
-        for layer_data in self.web_layers:
+        source_obj = LightSource("Source", self.wl, source_spectra)
+
+        # 2. Prepare the Web Stack Objects
+        web_stack_objs = []
+        for i, layer_data in enumerate(self.web_layers):
             mat = layer_data["mat_var"].get()
-            try: d = float(layer_data["thick_var"].get())
-            except ValueError: d = 0.0
+            try: 
+                d = float(layer_data["thick_var"].get())
+            except ValueError: 
+                d = 0.0
             
             alpha = self.material_library[mat]["alpha"]
-            T_bulk *= np.exp(-alpha * d)
+            n_data = self.material_library[mat]["n"]
+            
+            layer_obj = MaterialLayer(
+                name=f"Layer_{i}_{mat}", 
+                thickness=d, 
+                raw_wavelengths=self.wl, 
+                alpha_data=alpha, 
+                n_data=n_data
+            )
+            web_stack_objs.append(layer_obj)
 
-        base_intensity = source_spectra * T_bulk
-
+        # Clear axes
         for ax in (self.ax_top, self.ax_bot):
             ax.clear()
             ax.set_facecolor('#2b2b2b')
             ax.tick_params(colors='white')
-            for spine in ax.spines.values(): spine.set_color('gray')
+            for spine in ax.spines.values(): 
+                spine.set_color('gray')
 
         self.ax_top.set_title("System Optics: Source Emittance & Web Transmission", color='white')
         self.ax_top.set_ylabel("Transmission / Intensity", color='white')
         self.ax_bot.set_title("Filtered Signals Reaching Detectors", color='white')
         self.ax_bot.set_xlabel("Wavelength (nm)", color='white')
 
+        # Plot source output
         self.ax_top.plot(self.wl, source_spectra, color='#aaaaaa', linestyle="--", label="Source Output")
-        self.ax_top.plot(self.wl, T_bulk, color='white', label="Transmitted Spectrum")
+
+        first_channel = True
 
         for ch in self.sensor_channels:
             try:
@@ -748,12 +763,27 @@ class WebGaugingApp(ctk.CTk):
             except ValueError:
                 c_wl, fwhm = 2000, 10
             
+            # 3. Prepare Filter and Sensor Objects
             filter_spectra = gaussian_bandpass(self.wl, c_wl, fwhm, 1.0)
             sensor_spectra = self.get_sensor_spectra(ch["sensor_type_var"].get())
 
-            channel_spectra = base_intensity * filter_spectra * sensor_spectra
-            final_signal = np.trapezoid(channel_spectra, self.wl)
+            filter_obj = OpticalFilter(f"Filter_{c_wl}", self.wl, filter_spectra)
+            sensor_obj = Sensor("Sensor", self.wl, sensor_spectra)
+
+            # 4. RUN SIMULATION USING SHARED ENGINE
+            results = run_simulation(self.wl, source_obj, web_stack_objs, filter_obj, sensor_obj)
             
+            final_signal = results["final_signal"]
+            channel_spectra = results["spectra"]["signal_spectrum"]
+            
+            # Plot the transmitted spectrum (web transmission) just once
+            if first_channel:
+                # Multiply bulk and interface transmission for the total realistic curve
+                T_total = results["spectra"]["bulk_transmission"] * results["spectra"]["interface_transmission"]
+                self.ax_top.plot(self.wl, T_total, color='white', label="Transmitted Spectrum (Bulk + Fresnel)")
+                first_channel = False
+
+            # Update UI Readout
             ch["lbl_readout"].configure(text=f"Signal: {final_signal:.2f}")
 
             name = ch["name_var"].get()

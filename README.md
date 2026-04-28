@@ -67,7 +67,7 @@ It:
   - interface transmission
   - detector signal spectra for both channels
 
-This file is the best place to start if you want to understand the intended physical model.
+This file is a great place to start if you want to understand the intended physical model.
 
 ### `Components.py`
 
@@ -110,7 +110,7 @@ This class is especially important because it bridges spectral data and physical
 
 ### `Simulation.py`
 
-This is the backend physics engine currently used by `main.py`.
+This is the backend physics engine used by both `main.py` and the interactive GUI.
 
 The `run_simulation(...)` function:
 
@@ -199,14 +199,7 @@ Default startup configuration is already meaningful:
 
 One important implementation detail:
 
-The GUI currently contains its own simplified physics path instead of calling `run_simulation(...)` from `Simulation.py`.
-
-That means:
-
-- `main.py` includes both Beer-Lambert and Fresnel interface effects
-- `main_ui.py` currently models bulk absorption only in its live update path
-
-So the GUI is best viewed as an interactive prototype, while `main.py` is the more complete backend example.
+The GUI uses the exact same shared physics engine as the scripted example, calling `run_simulation(...)` from `Simulation.py`. This means both interfaces accurately model Beer-Lambert bulk absorption as well as Fresnel interface reflections.
 
 ### `PE_data.yml`
 
@@ -351,17 +344,13 @@ Based on the imports in this repository, you currently need:
 
 Example:
 
-```powershell
-pip install numpy matplotlib scipy pandas customtkinter
-```
+    pip install numpy matplotlib scipy pandas customtkinter
 
 ## How To Run
 
 ### Run the scripted simulation
 
-```powershell
-python main.py
-```
+    python main.py
 
 Expected behavior:
 
@@ -372,9 +361,7 @@ Expected behavior:
 
 ### Run the GUI
 
-```powershell
-python main_ui.py
-```
+    python main_ui.py
 
 Expected behavior:
 
@@ -393,15 +380,12 @@ If you are developing this further, the most natural workflow is:
 2. Add candidate filter/sensor channels in `main_ui.py`.
 3. Use `CHANNEL MATRIX` to check whether the selected channels can separate the unknown layer thicknesses.
 4. Use `main.py` to validate backend math and inspect spectra when interface/Fresnel effects matter.
-5. Move shared physics into `Simulation.py` so both script and GUI use the same engine.
-6. Expand the material library with measured datasets for EVOH, Nylon, and production PE grades.
+5. Expand the material library with measured datasets for EVOH, Nylon, and production PE grades.
 
 ## Known Limitations
 
 This README should reflect the project honestly, so here are the main current limitations visible in the code:
 
-- The GUI does not currently call the shared backend simulation function.
-- Fresnel interface effects are modeled in `Simulation.py` but not in the GUI live simulation path.
 - There is no dependency manifest file yet.
 - There are no automated tests yet.
 - There is no packaging, CLI, or installer yet.
@@ -415,28 +399,17 @@ This README should reflect the project honestly, so here are the main current li
 
 If you keep building this project, the highest-value improvements would likely be:
 
-1. Refactor `main_ui.py` to use `Simulation.run_simulation(...)`.
-2. Centralize all file loading through `DataLoader.py`.
-3. Add a `requirements.txt` or `pyproject.toml`.
-4. Add a few test cases for:
+1. Centralize all file loading through `DataLoader.py`.
+2. Add a `requirements.txt` or `pyproject.toml`.
+3. Add a few test cases for:
    - Beer-Lambert attenuation
    - Fresnel boundaries
    - material interpolation
    - signal integration
-5. Import measured EVOH and Nylon absorbance or optical-constant curves from known-thickness samples.
-6. Add export features for spectra, channel matrices, and channel results.
-7. Add calibration / regression tools to estimate thickness or composition from channel ratios.
+4. Import measured EVOH and Nylon absorbance or optical-constant curves from known-thickness samples.
+5. Add export features for spectra, channel matrices, and channel results.
+6. Add calibration / regression tools to estimate thickness or composition from channel ratios.
 
-## Why The New Name
-
-The old visible title in the GUI was `NIR Web Gauging Simulator - Pro Edition`.
-
-`PolyGauge NIR Simulator` is a better fit for the code currently in this repository because it is:
-
-- shorter
-- more specific to polymer film gauging
-- easier to reuse as the project grows
-- descriptive without sounding like a finished commercial product
 
 ## Summary
 
