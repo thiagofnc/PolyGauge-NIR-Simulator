@@ -277,7 +277,7 @@ class WebGaugingApp(ctk.CTk):
 
         self.add_layer_ui(mat="PE", thick="0.05")
         self.add_layer_ui(mat="EVOH", thick="0.015")
-        self.add_layer_ui(mat="Nylon", thick="0.02")
+        self.add_layer_ui(mat="Nylon 6", thick="0.02")
         self.add_layer_ui(mat="Water", thick="0.005")
 
         # ==========================================
@@ -298,6 +298,9 @@ class WebGaugingApp(ctk.CTk):
     # --- UI Builders ---
 
     def add_layer_ui(self, mat="PE", thick="0.05"):
+        if mat not in self.material_library:
+            mat = "PE"
+
         frame = ctk.CTkFrame(self.layers_container, fg_color="#333333")
         frame.pack(fill="x", pady=5, padx=5)
         
