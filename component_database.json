@@ -1,0 +1,44 @@
+{
+  "sources": [
+    {"name": "Blackbody Halogen 3000K", "type": "blackbody", "temp_k": 3000},
+    {"name": "Blackbody Halogen 2800K", "type": "blackbody", "temp_k": 2800},
+    {"name": "MTE6114W-WRC LED 1460nm", "type": "gaussian", "center_nm": 1460, "fwhm_nm": 103, "peak": 1.0},
+    {"name": "HPIR104 Thermal Emitter", "type": "blackbody", "temp_k": 903.15, "min_nm": 2000, "max_nm": 11000},
+    {"name": "Flat Ideal Source", "type": "flat", "level": 1.0}
+  ],
+  "filters": [
+    {"name": "Thorlabs FL1064-10", "center_nm": 1064, "fwhm_nm": 10, "peak": 1.0},
+    {"name": "Thorlabs FB1200-10", "center_nm": 1200, "fwhm_nm": 10, "peak": 1.0},
+    {"name": "Thorlabs FB1400-12", "center_nm": 1400, "fwhm_nm": 12, "peak": 1.0},
+    {"name": "Thorlabs FBH1450-12", "center_nm": 1450, "fwhm_nm": 12, "peak": 1.0},
+    {"name": "Syron BP1535-6", "center_nm": 1535, "fwhm_nm": 6, "peak": 1.0},
+    {"name": "Thorlabs FB1625-12", "center_nm": 1625, "fwhm_nm": 12, "peak": 1.0},
+    {"name": "PE 1730 nm", "center_nm": 1730, "fwhm_nm": 18, "peak": 1.0},
+    {"name": "PE 1750 nm", "center_nm": 1750, "fwhm_nm": 12, "peak": 1.0},
+    {"name": "Water 1940 nm", "center_nm": 1940, "fwhm_nm": 30, "peak": 1.0},
+    {"name": "EVOH 2012 nm", "center_nm": 2012, "fwhm_nm": 18, "peak": 1.0},
+    {"name": "Thorlabs FB2100-12", "center_nm": 2100, "fwhm_nm": 12, "peak": 1.0},
+    {"name": "Reference 2200 nm", "center_nm": 2200, "fwhm_nm": 20, "peak": 1.0},
+    {"name": "PE 2310 nm", "center_nm": 2310, "fwhm_nm": 20, "peak": 1.0},
+    {"name": "Andover 3000.0 / 100.0 - 69350-B", "center_nm": 3000, "fwhm_nm": 100, "peak": 1.0},
+    {"name": "PIRF-INBP3400 Type 1", "center_nm": 3400, "fwhm_nm": 140, "peak": 1.0}
+  ],
+  "sensors": [
+    {
+      "name": "InGaAs",
+      "type": "piecewise",
+      "points": [[1500, 0.6], [2000, 0.9], [2300, 1.0], [2500, 0.8], [2600, 0.0]]
+    },
+    {
+      "name": "InAsSb (2.7-5.3um)",
+      "type": "piecewise",
+      "points": [[2600, 0.0], [2700, 0.75], [3300, 1.0], [5000, 0.95], [5300, 0.5], [5400, 0.0]]
+    },
+    {
+      "name": "MCT (MIR)",
+      "type": "piecewise",
+      "points": [[2500, 0.0], [2800, 0.8], [3200, 1.0], [3800, 0.9], [4100, 0.0]]
+    },
+    {"name": "Ideal (Flat)", "type": "flat", "level": 1.0}
+  ]
+}

@@ -7,6 +7,8 @@ import os
 # Import the backend components
 from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
 from Simulation import run_simulation
+from ComponentDatabase import load_component_database
+from ChannelOptimizer import material_names_from_stack, rank_orthogonal_combinations
 
 # --- Physics & Data Helpers ---
 def gaussian_peak(wl, center, width, amplitude):
@@ -121,6 +123,7 @@ class WebGaugingApp(ctk.CTk):
         self.wl = np.arange(1000, 4001, 1.0)
         self.web_layers = []
         self.sensor_channels = []
+        self.component_database = load_component_database()
         
         self.colors = ['#00ffcc', '#ff3366', '#ffcc00', '#cc33ff', '#33ccff']
 
@@ -294,6 +297,8 @@ class WebGaugingApp(ctk.CTk):
                       fg_color="#00aa00", hover_color="#008800", font=("Arial", 16, "bold"), height=40).pack(fill="x", padx=20, pady=10)
         ctk.CTkButton(self.data_panel, text="CHANNEL MATRIX", command=self.show_channel_matrix,
                       fg_color="#0055aa", hover_color="#0077cc", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkButton(self.data_panel, text="RANK FILTER COMBOS", command=self.show_ranked_combinations,
+                      fg_color="#6b3fa0", hover_color="#7d51bd", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
 
     # --- UI Builders ---
 
@@ -736,6 +741,77 @@ class WebGaugingApp(ctk.CTk):
         text_box = ctk.CTkTextbox(popup, height=170, font=("Consolas", 12))
         text_box.pack(fill="x", padx=10, pady=(5, 10))
         text_box.insert("1.0", "\n".join(table_lines))
+        text_box.configure(state="disabled")
+
+    def show_ranked_combinations(self):
+        """Ranks source/filter/sensor combinations from the component database."""
+        materials = material_names_from_stack(self.material_library, self.web_layers)
+        channel_count = max(len(materials), 1)
+        results = rank_orthogonal_combinations(
+            self.wl,
+            self.material_library,
+            self.component_database,
+            materials=materials,
+            channel_count=channel_count,
+            top_n=25,
+            beam_width=300,
+        )
+
+        popup = ctk.CTkToplevel(self)
+        popup.title("Ranked Filter / Source / Sensor Combos")
+        popup.geometry("1150x760")
+        popup.attributes("-topmost", True)
+
+        ctk.CTkLabel(
+            popup,
+            text="Ranked database combinations for the current material stack",
+            font=("Arial", 16, "bold"),
+        ).pack(pady=(10, 4))
+
+        summary = (
+            f"Materials: {', '.join(materials)}    "
+            f"Channels per combo: {channel_count}    "
+            f"Sources: {len(self.component_database.get('sources', []))}    "
+            f"Filters: {len(self.component_database.get('filters', []))}    "
+            f"Sensors: {len(self.component_database.get('sensors', []))}"
+        )
+        ctk.CTkLabel(popup, text=summary).pack(pady=(0, 8))
+
+        text_box = ctk.CTkTextbox(popup, font=("Consolas", 12))
+        text_box.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+
+        if not results:
+            text_box.insert("1.0", "No viable combinations found. Check source/filter/sensor wavelength overlap.")
+            text_box.configure(state="disabled")
+            return
+
+        lines = []
+        lines.append("Score favors full-rank matrices, low material-column similarity, good conditioning, and live detector signal.")
+        lines.append("Use these as modeled shortlists; final hardware choices still need calibration and signal/noise checks.")
+        lines.append("")
+
+        for idx, result in enumerate(results, start=1):
+            condition = result["condition"]
+            condition_text = f"{condition:.3g}" if np.isfinite(condition) else "inf"
+            lines.append(
+                f"{idx:02d}. Score {result['score']:.1f} | Rank {result['rank']}/{len(materials)} | "
+                f"Condition {condition_text} | Orthogonality {result['orthogonality']:.3f}"
+            )
+            lines.append(f"    Source: {result['source']['name']}")
+            for channel_idx, channel in enumerate(result["channels"], start=1):
+                filter_def = channel["filter"]
+                sensor_def = channel["sensor"]
+                lines.append(
+                    f"    Ch {channel_idx}: {filter_def['name']} "
+                    f"({float(filter_def['center_nm']):.0f} nm / {float(filter_def['fwhm_nm']):.0f} nm) "
+                    f"+ {sensor_def['name']} | weight {result['weights'][channel_idx - 1]:.3g}"
+                )
+            lines.append("    Effective alpha matrix rows are channels, columns are " + ", ".join(materials))
+            for row in result["matrix"]:
+                lines.append("       " + " ".join(f"{value:10.4g}" for value in row))
+            lines.append("")
+
+        text_box.insert("1.0", "\n".join(lines))
         text_box.configure(state="disabled")
 
     # --- Core Physics Engine ---

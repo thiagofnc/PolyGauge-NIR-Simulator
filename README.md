@@ -167,6 +167,7 @@ The GUI currently provides:
 - popup material spectral viewer
 - material absorbance overlay viewer
 - channel matrix viewer for checking whether the selected filters/sensors can separate material thicknesses
+- ranked source/filter/sensor combination search driven by `component_database.json`
 
 The GUI wavelength axis currently spans `1000-4000 nm`, which covers common NIR polymer bands plus the `3.0-3.5 um` stretch region. The detector choices are approximate:
 
@@ -373,6 +374,7 @@ Expected behavior:
 - recalculates channel signals
 - updates plots of source/web transmission and filtered detector response
 - opens material curve and channel-matrix popups from the center/right panel buttons
+- opens a ranked hardware-combination popup for the current material stack
 
 ## Suggested Workflow
 
@@ -384,6 +386,27 @@ If you are developing this further, the most natural workflow is:
 4. Use `main.py` to validate backend math and inspect spectra when interface/Fresnel effects matter.
 5. Move shared physics into `Simulation.py` so both script and GUI use the same engine.
 6. Expand the material library with measured datasets for EVOH, Nylon 6, Nylon 66, and production PE grades.
+
+## Component Database And Ranking Workflow
+
+The simulator can load a hardware candidate database from `component_database.json`.
+
+The database has three top-level lists:
+
+- `sources`: blackbody, bounded blackbody, Gaussian LED-style, or flat source definitions
+- `filters`: Gaussian bandpass filters with `center_nm`, `fwhm_nm`, and optional peak transmission
+- `sensors`: piecewise responsivity curves or flat ideal detectors
+
+The GUI button `RANK FILTER COMBOS` searches this database for the current material stack. For each source, it forms viable filter/sensor channels, builds the same effective-alpha matrix used by `CHANNEL MATRIX`, and ranks channel sets by:
+
+- full material-column rank
+- low material-column similarity, meaning more orthogonal material responses
+- better matrix conditioning
+- nonzero source/filter/sensor overlap
+
+The number of channels in each ranked set defaults to the number of unique non-air materials in the current stack. This is the minimum channel count needed for a square thickness-solving matrix. Add many candidate filters, emitters, and detector responsivity curves to `component_database.json`; the optimizer uses a beam search so it can handle larger lists without trying every possible combination exhaustively.
+
+The ranked output is a modeled shortlist, not a final instrument design. Final selection should still include calibration data, detector noise, source drift, available filter tolerances, saturation limits, and required web-speed bandwidth.
 
 ## Known Limitations
 
@@ -410,8 +433,9 @@ If you keep building this project, the highest-value improvements would likely b
    - material interpolation
    - signal integration
 4. Import measured EVOH, Nylon 6, and Nylon 66 absorbance or optical-constant curves from known-thickness samples.
-5. Add export features for spectra, channel matrices, and channel results.
-6. Add calibration / regression tools to estimate thickness or composition from channel ratios.
+5. Expand `component_database.json` with real filter, emitter, and detector candidates.
+6. Add export features for spectra, channel matrices, ranked combinations, and channel results.
+7. Add calibration / regression tools to estimate thickness or composition from channel ratios.
 
 
 ## Summary
@@ -422,6 +446,7 @@ So far, this project is a promising NIR film-transmission and web-gauging protot
 - an interactive GUI
 - bundled PE and water optical-constant datasets
 - curve-comparison and channel-matrix tools for emitter/filter/sensor selection
+- database-backed ranking for orthogonal hardware combinations
 - clear room to grow into a more serious engineering tool
 
 For where it is right now, the architecture is already pointing in a good direction.
