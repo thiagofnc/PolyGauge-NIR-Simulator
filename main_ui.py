@@ -152,8 +152,9 @@ class WebGaugingApp(ctk.CTk):
                 ]),
                 "n": 1.52,
             },
-            "Nylon": {
+            "Nylon 6": {
                 "alpha": band_model(self.wl, [
+                    (1485, 28, 0.75),
                     (1535, 30, 1.20),
                     (2040, 42, 1.50),
                     (2300, 35, 0.55),
@@ -163,6 +164,20 @@ class WebGaugingApp(ctk.CTk):
                     (3500, 85, 6.0),
                 ]),
                 "n": 1.53,
+            },
+            "Nylon 66": {
+                "alpha": band_model(self.wl, [
+                    (1515, 32, 0.95),
+                    (1565, 34, 1.10),
+                    (2025, 42, 1.25),
+                    (2075, 45, 1.45),
+                    (2295, 35, 0.65),
+                    (2350, 36, 0.70),
+                    (3060, 78, 17.0),
+                    (3415, 82, 8.5),
+                    (3505, 88, 6.5),
+                ]),
+                "n": 1.54,
             },
         }
 
@@ -482,7 +497,8 @@ class WebGaugingApp(ctk.CTk):
         colors = {
             "PE": "#00ffcc",
             "EVOH": "#ffcc00",
-            "Nylon": "#cc33ff",
+            "Nylon 6": "#cc33ff",
+            "Nylon 66": "#ff66cc",
             "Water": "#33ccff",
             "Air": "#888888",
         }

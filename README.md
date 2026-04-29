@@ -40,7 +40,7 @@ That makes the project useful for questions like:
 - How does a reference channel compare against a measurement channel?
 - How does film stack design affect transmission?
 - How do source spectrum, filter placement, and detector response interact?
-- Can a set of channels mathematically separate PE, EVOH, Nylon, and water thicknesses?
+- Can a set of channels mathematically separate PE, EVOH, Nylon 6, Nylon 66, and water thicknesses?
 
 ## Repository Contents
 
@@ -241,7 +241,7 @@ The GUI material library is set up for NIR/SWIR/MIR absorbance-band comparison o
 
 - `Water` uses measured `n,k` data from `Water_data.yml` when that file is present. Its strong NIR bands are near `1450 nm` and `1940 nm`, so water layers should usually be modeled as very thin layers, often microns rather than tenths of a millimeter.
 - `PE` uses engineering-scale Gaussian bands from `1000-2600 nm`, then switches to measured `n,k` data from `PE_data.yml` above `2600 nm`. That means the strong `~3400 nm` PE band is a real curve from optical constants, not just a guessed point.
-- `EVOH` and `Nylon` currently use engineering-scale Gaussian band models. The band centers are sourced from NIR/IR spectroscopy literature, but the amplitudes are not calibrated extinction coefficients. Use them to compare band placement and channel sensitivity, not to infer absolute thickness.
+- `EVOH`, `Nylon 6`, and `Nylon 66` currently use engineering-scale Gaussian band models. The band centers are sourced from NIR/IR spectroscopy literature, but the amplitudes are not calibrated extinction coefficients. Use them to compare band placement and channel sensitivity, not to infer absolute thickness.
 - Channels above about `2600 nm` need the `MCT (MIR)` or `Ideal (Flat)` detector selection; the default `InGaAs` response intentionally cuts off in that region.
 
 Current modeled NIR bands:
@@ -250,14 +250,16 @@ Current modeled NIR bands:
 | --- | --- |
 | PE | `1210`, `1730`, `1764`, `2310`, `2350 nm`; measured optical constants above `2600 nm`, including the `~3400 nm` C-H stretch |
 | EVOH | `1410`, `2012`, `2092`, `2310 nm`; modeled O-H stretch region near `3000-3300 nm` |
-| Nylon | `1535`, `2040`, `2300`, `2355 nm`; modeled N-H stretch near `3030 nm` and CH2 stretch near `3410-3500 nm` |
+| Nylon 6 | `1485`, `1535`, `2040`, `2300`, `2355 nm`; modeled N-H stretch near `3030 nm` and CH2 stretch near `3410-3500 nm` |
+| Nylon 66 | `1515`, `1565`, `2025`, `2075`, `2295`, `2350 nm`; modeled N-H stretch near `3060 nm` and CH2 stretch near `3415-3505 nm` |
 | Water | measured `n,k`; prominent NIR absorption near `1450` and `1940 nm` |
 
 Useful sources:
 
 - Hale and Querry, "Optical constants of water in the 200-nm to 200-um wavelength region," Applied Optics 12, 555-563 (1973), via refractiveindex.info.
 - Iwamoto et al., "FT-NIR Spectroscopic Study of OH Groups in Ethylene-Vinyl Alcohol Copolymer," Applied Spectroscopy 55, 864-870 (2001).
-- Nylon 6 NIR studies in Journal of Molecular Structure and Vibrational Spectroscopy report crystalline/amorphous Nylon 6 bands around `1485-1535 nm`, N-H combination bands near `~2040 nm`, and CH2 combination features around `2300-2355 nm`.
+- Nylon 6 NIR studies in Journal of Molecular Structure report crystalline/amorphous Nylon 6 bands around `1485-1535 nm`, N-H combination bands near `~2040 nm`, and CH2 combination features around `2300-2355 nm`.
+- Nylon 66 NIR studies, including work on heat-set carpet yarns and industrial polyamide monitoring, show related but shifted amide/N-H and methylene bands; the current Nylon 66 curve is a separate modeled polyamide response rather than a measured optical-constant dataset.
 - PE NIR studies report CH2-related absorption around `1730-1764 nm` and strong hydrocarbon combination bands around `2300-2350 nm`.
 
 ## Viewing Curves
@@ -280,7 +282,7 @@ Thickness solving should be done in absorbance space:
 
 For narrow enough channels, each channel approximately follows:
 
-`A_channel = alpha_PE * d_PE + alpha_EVOH * d_EVOH + alpha_Nylon * d_Nylon + alpha_Water * d_Water`
+`A_channel = alpha_PE * d_PE + alpha_EVOH * d_EVOH + alpha_Nylon6 * d_Nylon6 + alpha_Nylon66 * d_Nylon66 + alpha_Water * d_Water`
 
 The GUI's `CHANNEL MATRIX` button estimates the effective `alpha` value for each material in each current sensor/filter channel by weighting the material absorption curve by:
 
@@ -327,7 +329,7 @@ The repo currently mixes synthetic and real inputs.
 - halogen source modeled with Planck’s law approximation
 - InGaAs responsivity curve approximated with piecewise interpolation
 - MCT responsivity curve approximated with piecewise interpolation
-- EVOH, Nylon, and some PE NIR absorption bands modeled as Gaussians
+- EVOH, Nylon 6, Nylon 66, and some PE NIR absorption bands modeled as Gaussians
 - optical filter passbands modeled as Gaussian peaks
 
 ### Real / file-driven
@@ -394,7 +396,7 @@ If you are developing this further, the most natural workflow is:
 3. Use `CHANNEL MATRIX` to check whether the selected channels can separate the unknown layer thicknesses.
 4. Use `main.py` to validate backend math and inspect spectra when interface/Fresnel effects matter.
 5. Move shared physics into `Simulation.py` so both script and GUI use the same engine.
-6. Expand the material library with measured datasets for EVOH, Nylon, and production PE grades.
+6. Expand the material library with measured datasets for EVOH, Nylon 6, Nylon 66, and production PE grades.
 
 ## Known Limitations
 
@@ -406,7 +408,7 @@ This README should reflect the project honestly, so here are the main current li
 - There are no automated tests yet.
 - There is no packaging, CLI, or installer yet.
 - The material library is still small.
-- EVOH and Nylon absorption curves are modeled from band locations, not calibrated measured spectra.
+- EVOH, Nylon 6, and Nylon 66 absorption curves are modeled from band locations, not calibrated measured spectra.
 - PE below `2600 nm` is still modeled; PE above `2600 nm` and water are file-driven measured optical constants.
 - Some data parsing in the GUI is custom and separate from `DataLoader.py`, so data-loading logic is duplicated.
 - The project currently assumes relatively simple normal-incidence transmission and does not include scattering, angular effects, or instrument noise modeling.
@@ -423,7 +425,7 @@ If you keep building this project, the highest-value improvements would likely b
    - Fresnel boundaries
    - material interpolation
    - signal integration
-5. Import measured EVOH and Nylon absorbance or optical-constant curves from known-thickness samples.
+5. Import measured EVOH, Nylon 6, and Nylon 66 absorbance or optical-constant curves from known-thickness samples.
 6. Add export features for spectra, channel matrices, and channel results.
 7. Add calibration / regression tools to estimate thickness or composition from channel ratios.
 

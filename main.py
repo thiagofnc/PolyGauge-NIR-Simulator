@@ -54,8 +54,9 @@ reference_filter = OpticalFilter("Reference_Filter", wl, ref_filter_data)
 alpha_pe = gaussian_peak(wl, 1730, 20, 0.5) + gaussian_peak(wl, 2310, 25, 2.0)
 # EVOH: Peak at 1930nm (OH), plus a smaller CH peak
 alpha_evoh = gaussian_peak(wl, 1930, 30, 1.8) + gaussian_peak(wl, 2310, 25, 0.5)
-# Nylon: Peaks at 1530nm and 2050nm (NH)
-alpha_nylon = gaussian_peak(wl, 1530, 25, 1.2) + gaussian_peak(wl, 2050, 30, 1.5)
+# Nylon 6 / Nylon 66: related N-H bands, split into separate engineering curves.
+alpha_nylon6 = gaussian_peak(wl, 1485, 28, 0.75) + gaussian_peak(wl, 1535, 25, 1.2) + gaussian_peak(wl, 2040, 30, 1.5)
+alpha_nylon66 = gaussian_peak(wl, 1515, 30, 0.95) + gaussian_peak(wl, 1565, 32, 1.1) + gaussian_peak(wl, 2075, 34, 1.45)
 
 # --- 3. Build the Optical Stack ---
 # Remember: If alpha is in mm^-1, thickness must be in mm!
