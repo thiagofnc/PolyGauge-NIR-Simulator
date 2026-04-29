@@ -2,7 +2,9 @@ import customtkinter as ctk
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
-import os 
+import os
+import csv
+import itertools
 
 # Import the backend components
 from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
@@ -19,11 +21,6 @@ def gaussian_bandpass(wl, center, fwhm, peak=1.0):
     return gaussian_peak(wl, center, sigma, peak)
 
 def band_model(wl, bands):
-    """Build a simple absorption model from NIR band centers.
-
-    Amplitudes are engineering-scale alpha values in mm^-1. They are intended
-    for comparing band placement and channel sensitivity, not for calibration.
-    """
     alpha = np.zeros_like(wl, dtype=float)
     for center, width, amplitude in bands:
         alpha += gaussian_peak(wl, center, width, amplitude)
@@ -58,55 +55,40 @@ def alpha_from_k(wl_nm, k):
     with np.errstate(divide='ignore', invalid='ignore'):
         return (4 * np.pi * k) / wl_mm
 
-
-
 def load_database_file(filepath, master_wl):
-    """
-    Parses standard YAML-like optical database files (e.g., refractiveindex.info).
-    Extracts Wavelength, n, and k, and interpolates them to the master array.
-    """
     if not os.path.exists(filepath):
         print(f"Warning: Could not find '{filepath}'.")
         return None, None
-        
+
     raw_wl, raw_n, raw_k = [], [], []
-    
+
     with open(filepath, 'r', encoding='utf-8') as f:
         for line in f:
             parts = line.strip().split()
-            # We are looking for lines with at least 2 numbers (wl and n)
             if len(parts) >= 2:
                 try:
-                    # If this succeeds, we are looking at real data, not a header
                     wl = float(parts[0])
                     n = float(parts[1])
                     raw_wl.append(wl)
                     raw_n.append(n)
-                    
-                    # If there is a 3rd column, it is 'k'
                     if len(parts) >= 3:
                         raw_k.append(float(parts[2]))
                 except ValueError:
-                    # It hit text like "REFERENCES:" or "data:". Skip it.
                     pass
-                    
+
     if not raw_wl:
         return None, None
 
-    # Convert wavelengths from micrometers to nanometers
     raw_wl = np.array(raw_wl) * 1000.0
     raw_n = np.array(raw_n)
-    
-    # Interpolate n onto master wavelengths
     interp_n = np.interp(master_wl, raw_wl, raw_n, left=raw_n[0], right=raw_n[-1])
-    
-    # Interpolate k if it exists
+
     if raw_k:
         raw_k = np.array(raw_k)
         interp_k = np.interp(master_wl, raw_wl, raw_k, left=raw_k[0], right=raw_k[-1])
     else:
         interp_k = None
-        
+
     return interp_n, interp_k
 
 # Set UI Theme
@@ -119,68 +101,30 @@ class WebGaugingApp(ctk.CTk):
         self.title("PolyGauge NIR Simulator")
         self.geometry("1400x850")
 
-        # Master Data
         self.wl = np.arange(1000, 4001, 1.0)
         self.web_layers = []
         self.sensor_channels = []
         self.component_database = load_component_database()
-        
         self.colors = ['#00ffcc', '#ff3366', '#ffcc00', '#cc33ff', '#33ccff']
 
-
-        #   --- Pre-loaded Material Library ---
         self.material_library = {
             "Air": {"alpha": np.zeros_like(self.wl), "n": 1.0},
-            # NIR engineering band models for absorbance-band comparison.
-            # See README "Material Data Notes" for source references.
             "PE": {
-                "alpha": band_model(self.wl, [
-                    (1210, 35, 0.20),
-                    (1730, 24, 0.85),
-                    (1764, 24, 0.55),
-                    (2310, 32, 2.00),
-                    (2350, 32, 1.35),
-                ]),
+                "alpha": band_model(self.wl, [(1210, 35, 0.20), (1730, 24, 0.85), (1764, 24, 0.55), (2310, 32, 2.00), (2350, 32, 1.35)]),
                 "n": 1.51,
             },
             "EVOH": {
-                "alpha": band_model(self.wl, [
-                    (1410, 28, 0.45),
-                    (2012, 38, 0.90),
-                    (2092, 48, 1.80),
-                    (2310, 35, 0.45),
-                    (3000, 90, 18.0),
-                    (3305, 110, 12.0),
-                ]),
+                "alpha": band_model(self.wl, [(1410, 28, 0.45), (2012, 38, 0.90), (2092, 48, 1.80), (2310, 35, 0.45), (3000, 90, 18.0), (3305, 110, 12.0)]),
                 "n": 1.52,
             },
             "Nylon 6": {
-                "alpha": band_model(self.wl, [
-                    (1485, 28, 0.75),
-                    (1535, 30, 1.20),
-                    (2040, 42, 1.50),
-                    (2300, 35, 0.55),
-                    (2355, 35, 0.55),
-                    (3030, 75, 18.0),
-                    (3410, 80, 8.0),
-                    (3500, 85, 6.0),
-                ]),
+                "alpha": band_model(self.wl, [(1485, 28, 0.75), (1535, 30, 1.20), (2040, 42, 1.50), (2300, 35, 0.55), (2355, 35, 0.55), (3030, 75, 18.0), (3410, 80, 8.0), (3500, 85, 6.0)]),
                 "n": 1.53,
             },
-            "Nylon 66": {
-                "alpha": band_model(self.wl, [
-                    (1515, 32, 0.95),
-                    (1565, 34, 1.10),
-                    (2025, 42, 1.25),
-                    (2075, 45, 1.45),
-                    (2295, 35, 0.65),
-                    (2350, 36, 0.70),
-                    (3060, 78, 17.0),
-                    (3415, 82, 8.5),
-                    (3505, 88, 6.5),
-                ]),
-                "n": 1.54,
-            },
+            # "Nylon 66": {
+            #     "alpha": band_model(self.wl, [(1515, 32, 0.95), (1565, 34, 1.10), (2025, 42, 1.25), (2075, 45, 1.45), (2295, 35, 0.65), (2350, 36, 0.70), (3060, 78, 17.0), (3415, 82, 8.5), (3505, 88, 6.5)]),
+            #     "n": 1.54,
+            # },
         }
 
         pe_n, pe_k = load_database_file("PE_data.yml", self.wl)
@@ -188,30 +132,16 @@ class WebGaugingApp(ctk.CTk):
             measured_region = self.wl >= 2600
             pe_alpha = self.material_library["PE"]["alpha"].copy()
             pe_alpha[measured_region] = alpha_from_k(self.wl, pe_k)[measured_region]
-
             pe_n_combined = np.full_like(self.wl, 1.51, dtype=float)
             if pe_n is not None:
                 pe_n_combined[measured_region] = pe_n[measured_region]
-
-            self.material_library["PE"] = {
-                "alpha": pe_alpha,
-                "n": pe_n_combined,
-            }
+            self.material_library["PE"] = {"alpha": pe_alpha, "n": pe_n_combined}
 
         water_n, water_k = load_database_file("Water_data.yml", self.wl)
         if water_k is not None:
-            self.material_library["Water"] = {
-                "alpha": alpha_from_k(self.wl, water_k),
-                "n": water_n if water_n is not None else 1.33,
-            }
+            self.material_library["Water"] = {"alpha": alpha_from_k(self.wl, water_k), "n": water_n if water_n is not None else 1.33}
         else:
-            self.material_library["Water"] = {
-                "alpha": band_model(self.wl, [
-                    (1450, 55, 12.0),
-                    (1940, 70, 40.0),
-                ]),
-                "n": 1.33,
-            }
+            self.material_library["Water"] = {"alpha": band_model(self.wl, [(1450, 55, 12.0), (1940, 70, 40.0)]), "n": 1.33}
 
         self.setup_ui()
         self.run_live_simulation()
@@ -222,25 +152,18 @@ class WebGaugingApp(ctk.CTk):
         self.grid_columnconfigure(2, weight=3)
         self.grid_rowconfigure(0, weight=1)
 
-        # ==========================================
-        # PANEL 1: SOURCE & SENSOR STACK (Left)
-        # ==========================================
+        # PANEL 1: SOURCE & SENSOR STACK
         self.left_panel = ctk.CTkFrame(self)
         self.left_panel.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        
+
         ctk.CTkLabel(self.left_panel, text="Light Source", font=("Arial", 18, "bold")).pack(pady=(10, 0))
         self.source_frame = ctk.CTkFrame(self.left_panel, fg_color="#2b2b2b")
         self.source_frame.pack(fill="x", padx=10, pady=5)
-        
+
         self.source_type_var = ctk.StringVar(value="Blackbody (Halogen)")
-        ctk.CTkOptionMenu(self.source_frame, variable=self.source_type_var, 
-                          values=[
-                              "Blackbody (Halogen)",
-                              "MTE6114W-WRC LED (1460nm)",
-                              "HPIR104 Thermal Emitter",
-                              "Flat Emission (Ideal)",
-                          ]).pack(pady=5)
-        
+        ctk.CTkOptionMenu(self.source_frame, variable=self.source_type_var,
+                          values=["Blackbody (Halogen)", "MTE6114W-WRC LED (1460nm)", "HPIR104 Thermal Emitter", "Flat Emission (Ideal)"]).pack(pady=5)
+
         temp_frame = ctk.CTkFrame(self.source_frame, fg_color="transparent")
         temp_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(temp_frame, text="Temp (K):").pack(side="left", padx=5)
@@ -250,50 +173,37 @@ class WebGaugingApp(ctk.CTk):
         ctk.CTkLabel(self.left_panel, text="Sensor Channels", font=("Arial", 18, "bold")).pack(pady=(20, 0))
         self.sensors_container = ctk.CTkScrollableFrame(self.left_panel)
         self.sensors_container.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        ctk.CTkButton(self.left_panel, text="+ Add Sensor Channel", command=self.add_sensor_ui).pack(pady=10)
-        
-        # --- NEW 8-CHANNEL DEFAULT FILTER CONFIGURATION ---
-        self.add_sensor_ui(center="1064", width="10", name="Ref A (Thorlabs FL1064-10)")
-        self.add_sensor_ui(center="1625", width="12", name="Ref B (Thorlabs FB1625-12)")
-        self.add_sensor_ui(center="1450", width="12", name="Water Primary (Thorlabs FBH1450-12)")
-        self.add_sensor_ui(center="1535", width="6", name="Nylon Primary (Syron BP1535-6)")
-        self.add_sensor_ui(center="1400", width="12", name="EVOH Primary (Thorlabs FB1400-12)")
-        self.add_sensor_ui(center="2100", width="12", name="EVOH Secondary (Thorlabs FB2100-12)")
-        self.add_sensor_ui(center="1750", width="12", name="PE Primary (Thorlabs FB1750-12)")
-        self.add_sensor_ui(center="1200", width="10", name="PE Secondary (Thorlabs FB1200-10)")
 
-        # ==========================================
-        # PANEL 2: WEB STACK (Center)
-        # ==========================================
+        btn_frame = ctk.CTkFrame(self.left_panel, fg_color="transparent")
+        btn_frame.pack(pady=10, fill="x", padx=5)
+        ctk.CTkButton(btn_frame, text="+ Add Sensor Channel", command=self.add_sensor_ui).pack(side="left", padx=5, expand=True)
+        ctk.CTkButton(btn_frame, text="Add All from Database", command=self.add_sensors_from_db, fg_color="#aa5500", hover_color="#cc7700").pack(side="left", padx=5, expand=True)
+
+        # PANEL 2: WEB STACK
         self.stack_panel = ctk.CTkFrame(self)
         self.stack_panel.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
-        
+
         ctk.CTkLabel(self.stack_panel, text="Web Material Stack", font=("Arial", 18, "bold")).pack(pady=10)
         self.layers_container = ctk.CTkScrollableFrame(self.stack_panel)
         self.layers_container.pack(fill="both", expand=True, padx=5, pady=5)
-        
+
         ctk.CTkButton(self.stack_panel, text="+ Add Layer", command=self.add_layer_ui).pack(pady=10)
-        ctk.CTkButton(self.stack_panel, text="Compare Absorbance Curves",
-                      command=self.show_all_material_spectra).pack(pady=(0, 10))
-        
+        ctk.CTkButton(self.stack_panel, text="Compare Absorbance Curves", command=self.show_all_material_spectra).pack(pady=(0, 10))
 
         self.add_layer_ui(mat="PE", thick="0.05")
         self.add_layer_ui(mat="EVOH", thick="0.015")
         self.add_layer_ui(mat="Nylon 6", thick="0.02")
         self.add_layer_ui(mat="Water", thick="0.005")
 
-        # ==========================================
-        # PANEL 3: GRAPH & GLOBAL CONTROLS (Right)
-        # ==========================================
+        # PANEL 3: GRAPH & GLOBAL CONTROLS
         self.data_panel = ctk.CTkFrame(self)
         self.data_panel.grid(row=0, column=2, padx=10, pady=10, sticky="nsew")
-        
+
         self.fig, (self.ax_top, self.ax_bot) = plt.subplots(2, 1, figsize=(8, 6), facecolor='#2b2b2b', gridspec_kw={'height_ratios': [2, 1]})
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.data_panel)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
 
-        ctk.CTkButton(self.data_panel, text="UPDATE SIMULATION", command=self.run_live_simulation, 
+        ctk.CTkButton(self.data_panel, text="UPDATE SIMULATION", command=self.run_live_simulation,
                       fg_color="#00aa00", hover_color="#008800", font=("Arial", 16, "bold"), height=40).pack(fill="x", padx=20, pady=10)
         ctk.CTkButton(self.data_panel, text="CHANNEL MATRIX", command=self.show_channel_matrix,
                       fg_color="#0055aa", hover_color="#0077cc", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
@@ -301,6 +211,24 @@ class WebGaugingApp(ctk.CTk):
                       fg_color="#6b3fa0", hover_color="#7d51bd", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
 
     # --- UI Builders ---
+    def add_sensors_from_db(self):
+        filepath = "filters_database.csv"
+        if not os.path.exists(filepath):
+            print(f"Database file '{filepath}' not found.")
+            return
+
+        with open(filepath, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                center = row.get("Center (nm)", "").strip()
+                width = row.get("FWHM (nm)", "").strip()
+                extra = row.get("Extra Info", "").strip()
+                prod = row.get("Product Name", "").strip()
+                price_str = row.get("Price", "150").replace('$', '').strip()
+
+                name = f"{extra} ({prod})" if extra else prod
+                if center and width:
+                    self.add_sensor_ui(center=center, width=width, name=name, price=price_str)
 
     def add_layer_ui(self, mat="PE", thick="0.05"):
         if mat not in self.material_library:
@@ -308,58 +236,62 @@ class WebGaugingApp(ctk.CTk):
 
         frame = ctk.CTkFrame(self.layers_container, fg_color="#333333")
         frame.pack(fill="x", pady=5, padx=5)
-        
+
         mat_var = ctk.StringVar(value=mat)
         ctk.CTkOptionMenu(frame, variable=mat_var, values=list(self.material_library.keys()), width=90).pack(side="left", padx=5, pady=10)
-        
+
         thick_var = ctk.StringVar(value=thick)
         ctk.CTkEntry(frame, textvariable=thick_var, width=60).pack(side="left", padx=5)
         ctk.CTkLabel(frame, text="mm").pack(side="left")
-        
-        # Delete Button (Red)
+
         ctk.CTkButton(frame, text="X", width=30, fg_color="#aa0000", hover_color="#ff0000",
                       command=lambda f=frame: self.remove_element(f, self.web_layers)).pack(side="right", padx=(5, 5))
-        
-        # View Spectral Data Button (Blue)
+
         ctk.CTkButton(frame, text="👁️", width=30, fg_color="#0055aa", hover_color="#0077ff",
                       command=lambda m=mat_var: self.show_material_spectra(m.get())).pack(side="right", padx=(5, 0))
 
         self.web_layers.append({"frame": frame, "mat_var": mat_var, "thick_var": thick_var})
 
-    def add_sensor_ui(self, center="2310", width="15", name="Sensor"):
+    def add_sensor_ui(self, center="2310", width="15", name="Sensor", sensor_type="InGaAs", price="150"):
         color = self.colors[len(self.sensor_channels) % len(self.colors)]
         frame = ctk.CTkFrame(self.sensors_container, border_width=2, border_color=color, fg_color="#333333")
         frame.pack(fill="x", pady=5, padx=5)
-        
+
         row1 = ctk.CTkFrame(frame, fg_color="transparent")
         row1.pack(fill="x", padx=5, pady=(5,0))
         name_var = ctk.StringVar(value=name)
-        ctk.CTkEntry(row1, textvariable=name_var, width=100).pack(side="left")
-        sensor_type_var = ctk.StringVar(value="InGaAs")
+        ctk.CTkEntry(row1, textvariable=name_var, width=180).pack(side="left")
+
+        sensor_type_var = ctk.StringVar(value=sensor_type)
         ctk.CTkOptionMenu(row1, variable=sensor_type_var,
                           values=["InGaAs", "InAsSb (2.7-5.3um)", "MCT (MIR)", "Ideal (Flat)"],
-                          width=130).pack(side="right")
+                          width=110).pack(side="right")
 
         row2 = ctk.CTkFrame(frame, fg_color="transparent")
         row2.pack(fill="x", padx=5, pady=5)
         ctk.CTkLabel(row2, text="CWL:").pack(side="left")
         center_var = ctk.StringVar(value=center)
-        ctk.CTkEntry(row2, textvariable=center_var, width=50).pack(side="left", padx=(0,10))
+        ctk.CTkEntry(row2, textvariable=center_var, width=45).pack(side="left", padx=(0,5))
+
         ctk.CTkLabel(row2, text="FWHM:").pack(side="left")
         width_var = ctk.StringVar(value=width)
-        ctk.CTkEntry(row2, textvariable=width_var, width=40).pack(side="left")
+        ctk.CTkEntry(row2, textvariable=width_var, width=35).pack(side="left")
+
+        ctk.CTkLabel(row2, text="Price: $").pack(side="left", padx=(5,0))
+        price_var = ctk.StringVar(value=str(price))
+        ctk.CTkEntry(row2, textvariable=price_var, width=40).pack(side="left")
 
         row3 = ctk.CTkFrame(frame, fg_color="transparent")
         row3.pack(fill="x", padx=5, pady=(0,5))
         lbl_readout = ctk.CTkLabel(row3, text="Signal: 0.00", font=("Arial", 14, "bold"), text_color=color)
         lbl_readout.pack(side="left")
-        
+
         ctk.CTkButton(row3, text="X", width=30, fg_color="#aa0000", hover_color="#ff0000",
                       command=lambda f=frame: self.remove_element(f, self.sensor_channels)).pack(side="right")
-        
+
         self.sensor_channels.append({
-            "frame": frame, "name_var": name_var, "center_var": center_var, "width_var": width_var, 
-            "sensor_type_var": sensor_type_var, "lbl_readout": lbl_readout, "color": color
+            "frame": frame, "name_var": name_var, "center_var": center_var, "width_var": width_var,
+            "price_var": price_var, "sensor_type_var": sensor_type_var, "lbl_readout": lbl_readout, "color": color
         })
 
     def remove_element(self, frame, target_list):
@@ -369,27 +301,19 @@ class WebGaugingApp(ctk.CTk):
     def get_source_spectra(self):
         source_type = self.source_type_var.get()
         if source_type == "Blackbody (Halogen)":
-            try:
-                temp = float(self.source_temp_var.get())
-            except ValueError:
-                temp = 3000
+            try: temp = float(self.source_temp_var.get())
+            except ValueError: temp = 3000
             return blackbody_spectrum(self.wl, temp)
-
         if source_type == "MTE6114W-WRC LED (1460nm)":
             return gaussian_bandpass(self.wl, 1460, 103, 1.0)
-
         if source_type == "HPIR104 Thermal Emitter":
             return bounded_blackbody_spectrum(self.wl, 903.15, min_nm=2000, max_nm=11000)
-
         return np.ones_like(self.wl)
 
     def get_sensor_spectra(self, sensor_type):
-        if sensor_type == "InGaAs":
-            return ingaas_responsivity(self.wl)
-        if sensor_type == "InAsSb (2.7-5.3um)":
-            return inassb_responsivity(self.wl)
-        if sensor_type == "MCT (MIR)":
-            return mct_responsivity(self.wl)
+        if sensor_type == "InGaAs": return ingaas_responsivity(self.wl)
+        if sensor_type == "InAsSb (2.7-5.3um)": return inassb_responsivity(self.wl)
+        if sensor_type == "MCT (MIR)": return mct_responsivity(self.wl)
         return np.ones_like(self.wl)
 
     def get_channel_definitions(self):
@@ -398,6 +322,7 @@ class WebGaugingApp(ctk.CTk):
             try:
                 center = float(ch["center_var"].get())
                 width = float(ch["width_var"].get())
+                price = float(ch["price_var"].get().replace('$', '').strip())
             except ValueError:
                 continue
 
@@ -405,78 +330,61 @@ class WebGaugingApp(ctk.CTk):
                 "name": ch["name_var"].get(),
                 "center": center,
                 "width": width,
+                "price": price,
                 "sensor_type": ch["sensor_type_var"].get(),
             })
 
         return channels
 
-    # --- Pop-up Viewer ---
-
     def show_material_spectra(self, mat_name):
-        """Spawns a popup window showing the isolated spectral profile of a given material."""
         if mat_name not in self.material_library:
             return
-            
+
         data = self.material_library[mat_name]
-        
-        # Create Popup
         popup = ctk.CTkToplevel(self)
         popup.title(f"Material Profile: {mat_name}")
         popup.geometry("600x450")
-        popup.attributes("-topmost", True) # Force to top initially so it doesn't get lost
-        
-        # Setup Figure with Dual Axes
+        popup.attributes("-topmost", True)
+
         fig, ax_alpha = plt.subplots(figsize=(6, 4), facecolor='#2b2b2b')
         ax_alpha.set_facecolor('#2b2b2b')
         ax_alpha.set_title(f"{mat_name} Base Spectral Properties", color='white')
         ax_alpha.set_xlabel("Wavelength (nm)", color='white')
         ax_alpha.tick_params(colors='white')
-        
-        # Plot Absorption on Left Axis
+
         color_alpha = '#ff3366'
         ax_alpha.set_ylabel("Absorption Coefficient (mm⁻¹)", color=color_alpha)
         ax_alpha.plot(self.wl, data["alpha"], color=color_alpha, label="Absorption (α)")
         ax_alpha.tick_params(axis='y', labelcolor=color_alpha)
         ax_alpha.grid(True, alpha=0.2)
-        
-        # Plot Refractive Index on Right Axis
+
         ax_n = ax_alpha.twinx()
         color_n = '#00ccff'
         ax_n.set_ylabel("Refractive Index (n)", color=color_n)
-        
-        # Handle constant vs array refractive index
+
         n_data = np.full_like(self.wl, data["n"]) if isinstance(data["n"], (int, float)) else data["n"]
         ax_n.plot(self.wl, n_data, color=color_n, linestyle='--', label="Refractive Index (n)")
         ax_n.tick_params(axis='y', labelcolor=color_n)
-        
-        # Combine Legends
+
         lines_1, labels_1 = ax_alpha.get_legend_handles_labels()
         lines_2, labels_2 = ax_n.get_legend_handles_labels()
         ax_alpha.legend(lines_1 + lines_2, labels_1 + labels_2, facecolor='#333333', edgecolor='white', labelcolor='white', loc='upper left')
-        
+
         fig.tight_layout()
-        
-        # Embed in Tkinter
         canvas = FigureCanvasTkAgg(fig, master=popup)
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
 
         marker_alpha, = ax_alpha.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
         marker_n, = ax_n.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
         annotation = ax_alpha.annotate(
-            "",
-            xy=(0, 0),
-            xytext=(12, 12),
-            textcoords="offset points",
-            color="white",
+            "", xy=(0, 0), xytext=(12, 12), textcoords="offset points", color="white",
             bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
             arrowprops=dict(arrowstyle="->", color="white"),
         )
         annotation.set_visible(False)
 
         def on_click(event):
-            if event.xdata is None:
-                return
-
+            if event.xdata is None: return
             idx = int(np.argmin(np.abs(self.wl - event.xdata)))
             x_val = self.wl[idx]
 
@@ -492,8 +400,7 @@ class WebGaugingApp(ctk.CTk):
                 marker_n.set_data([], [])
                 annotation.xy = (x_val, y_val)
                 annotation.set_text(f"{x_val:.0f} nm\nalpha: {y_val:.4g} mm^-1")
-            else:
-                return
+            else: return
 
             annotation.set_visible(True)
             canvas.draw_idle()
@@ -502,34 +409,31 @@ class WebGaugingApp(ctk.CTk):
         canvas.draw()
 
     def show_all_material_spectra(self):
-        """Shows all material absorption curves in one popup."""
+        """Shows all material absorption curves in one popup, with optional filter overlays."""
         popup = ctk.CTkToplevel(self)
         popup.title("Material Absorbance Comparison")
-        popup.geometry("900x650")
+        popup.geometry("900x700")
         popup.attributes("-topmost", True)
+
+        # UI for toggling filters
+        ctrl_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        ctrl_frame.pack(fill="x", padx=10, pady=(10, 0))
+
+        show_filters_var = ctk.BooleanVar(value=True)
 
         fig, (ax_raw, ax_norm) = plt.subplots(2, 1, figsize=(9, 6), facecolor='#2b2b2b', sharex=True)
 
-        colors = {
-            "PE": "#00ffcc",
-            "EVOH": "#ffcc00",
-            "Nylon 6": "#cc33ff",
-            "Nylon 66": "#ff66cc",
-            "Water": "#33ccff",
-            "Air": "#888888",
-        }
+        colors = {"PE": "#00ffcc", "EVOH": "#ffcc00", "Nylon 6": "#cc33ff", "Nylon 66": "#ff66cc", "Water": "#33ccff", "Air": "#888888"}
 
         for ax in (ax_raw, ax_norm):
             ax.set_facecolor('#2b2b2b')
             ax.tick_params(colors='white')
             ax.grid(True, alpha=0.2)
-            for spine in ax.spines.values():
-                spine.set_color('gray')
+            for spine in ax.spines.values(): spine.set_color('gray')
 
         plotted = []
         for mat_name, data in self.material_library.items():
-            if mat_name == "Air":
-                continue
+            if mat_name == "Air": continue
 
             alpha = np.asarray(data["alpha"], dtype=float)
             color = colors.get(mat_name, None)
@@ -539,13 +443,7 @@ class WebGaugingApp(ctk.CTk):
             if max_alpha > 0:
                 norm_alpha = alpha / max_alpha
                 norm_line, = ax_norm.plot(self.wl, norm_alpha, label=mat_name, color=color, linewidth=1.8)
-                plotted.append({
-                    "name": mat_name,
-                    "raw": alpha,
-                    "norm": norm_alpha,
-                    "raw_line": raw_line,
-                    "norm_line": norm_line,
-                })
+                plotted.append({"name": mat_name, "raw": alpha, "norm": norm_alpha, "raw_line": raw_line, "norm_line": norm_line})
 
         ax_raw.set_title("Absorption Coefficient", color='white')
         ax_raw.set_ylabel("alpha (mm^-1)", color='white')
@@ -558,58 +456,86 @@ class WebGaugingApp(ctk.CTk):
         for ax in (ax_raw, ax_norm):
             ax.legend(facecolor='#333333', edgecolor='white', labelcolor='white', loc='upper right')
 
-        fig.tight_layout()
+        # --- Filter Overlay Logic ---
+        ax_raw_twin = ax_raw.twinx()
+        ax_raw_twin.set_ylabel("Filter Transmission", color='#aaaaaa')
+        ax_raw_twin.tick_params(axis='y', colors='#aaaaaa')
+        ax_raw_twin.set_ylim(0, 1.05)
+        for spine in ax_raw_twin.spines.values(): spine.set_color('gray')
 
+        filter_artists = []
+
+        for ch in self.sensor_channels:
+            try:
+                c_wl = float(ch["center_var"].get())
+                fwhm = float(ch["width_var"].get())
+            except ValueError:
+                continue
+
+            color = ch["color"]
+            filter_spectra = gaussian_bandpass(self.wl, c_wl, fwhm, 1.0)
+
+            # Plot on secondary top axis
+            f1 = ax_raw_twin.fill_between(self.wl, 0, filter_spectra, color=color, alpha=0.15)
+            l1, = ax_raw_twin.plot(self.wl, filter_spectra, color=color, linestyle=":", alpha=0.8)
+
+            # Plot on bottom normalized axis
+            f2 = ax_norm.fill_between(self.wl, 0, filter_spectra, color=color, alpha=0.15)
+            l2, = ax_norm.plot(self.wl, filter_spectra, color=color, linestyle=":", alpha=0.8)
+
+            filter_artists.extend([f1, l1, f2, l2])
+
+        def toggle_filters():
+            is_visible = show_filters_var.get()
+            for artist in filter_artists:
+                artist.set_visible(is_visible)
+            ax_raw_twin.get_yaxis().set_visible(is_visible)
+            canvas.draw_idle()
+
+        ctk.CTkCheckBox(ctrl_frame, text="Overlay Sensor Filters", variable=show_filters_var, command=toggle_filters).pack(side="left")
+
+        # Hide twin y-axis by default if no filters exist
+        if not filter_artists:
+            ax_raw_twin.get_yaxis().set_visible(False)
+            show_filters_var.set(False)
+
+        # ----------------------------
+
+        fig.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=popup)
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
 
         raw_marker, = ax_raw.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
         norm_marker, = ax_norm.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
-        raw_annotation = ax_raw.annotate(
-            "",
-            xy=(0, 0),
-            xytext=(12, 12),
-            textcoords="offset points",
-            color="white",
-            bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
-            arrowprops=dict(arrowstyle="->", color="white"),
-        )
-        norm_annotation = ax_norm.annotate(
-            "",
-            xy=(0, 0),
-            xytext=(12, 12),
-            textcoords="offset points",
-            color="white",
-            bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
-            arrowprops=dict(arrowstyle="->", color="white"),
-        )
+        raw_annotation = ax_raw.annotate("", xy=(0, 0), xytext=(12, 12), textcoords="offset points", color="white", bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95), arrowprops=dict(arrowstyle="->", color="white"))
+        norm_annotation = ax_norm.annotate("", xy=(0, 0), xytext=(12, 12), textcoords="offset points", color="white", bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95), arrowprops=dict(arrowstyle="->", color="white"))
         raw_annotation.set_visible(False)
         norm_annotation.set_visible(False)
 
         def on_click(event):
-            if event.xdata is None or event.inaxes not in (ax_raw, ax_norm):
-                return
+            # Treat clicks on the twin filter axis as clicks on the main raw axis
+            click_ax = ax_raw if event.inaxes == ax_raw_twin else event.inaxes
+            if event.xdata is None or click_ax not in (ax_raw, ax_norm): return
 
             idx = int(np.argmin(np.abs(self.wl - event.xdata)))
             x_val = self.wl[idx]
-            series_key = "raw" if event.inaxes == ax_raw else "norm"
+            series_key = "raw" if click_ax == ax_raw else "norm"
             click_xy = np.array([event.x, event.y])
 
             nearest = None
             nearest_distance = float("inf")
             for item in plotted:
                 y_val = item[series_key][idx]
-                pixel_xy = event.inaxes.transData.transform((x_val, y_val))
+                pixel_xy = click_ax.transData.transform((x_val, y_val))
                 distance = np.linalg.norm(pixel_xy - click_xy)
                 if distance < nearest_distance:
                     nearest = item
                     nearest_distance = distance
 
-            if nearest is None:
-                return
+            if nearest is None: return
 
             y_val = nearest[series_key][idx]
-            if event.inaxes == ax_raw:
+            if click_ax == ax_raw:
                 raw_marker.set_data([x_val], [y_val])
                 norm_marker.set_data([], [])
                 raw_annotation.xy = (x_val, y_val)
@@ -630,12 +556,10 @@ class WebGaugingApp(ctk.CTk):
         canvas.draw()
 
     def show_channel_matrix(self):
-        """Shows effective absorption coefficients for the current channels."""
         channels = self.get_channel_definitions()
         materials = [name for name in self.material_library.keys() if name != "Air"]
 
-        if not channels:
-            return
+        if not channels: return
 
         source_spectra = self.get_source_spectra()
         matrix = np.zeros((len(channels), len(materials)), dtype=float)
@@ -658,30 +582,88 @@ class WebGaugingApp(ctk.CTk):
         singular_values = np.linalg.svd(matrix, compute_uv=False)
         nonzero_singular_values = singular_values[singular_values > 1e-12]
         rank = int(np.linalg.matrix_rank(matrix, tol=1e-9))
-        if len(nonzero_singular_values) >= 2:
-            condition = nonzero_singular_values[0] / nonzero_singular_values[-1]
-        elif len(nonzero_singular_values) == 1:
-            condition = float("inf")
-        else:
-            condition = float("inf")
+        condition = nonzero_singular_values[0] / nonzero_singular_values[-1] if len(nonzero_singular_values) >= 2 else float("inf")
 
         popup = ctk.CTkToplevel(self)
         popup.title("Channel Matrix")
-        popup.geometry("1100x760")
+        popup.geometry("1100x850")
         popup.attributes("-topmost", True)
 
-        header = ctk.CTkLabel(
-            popup,
-            text="Effective alpha matrix: rows are sensor/filter channels, columns are materials",
-            font=("Arial", 16, "bold"),
-        )
+        header = ctk.CTkLabel(popup, text="Effective alpha matrix: rows are sensor/filter channels, columns are materials", font=("Arial", 16, "bold"))
         header.pack(pady=(10, 4))
 
-        summary_text = (
-            f"Channels: {len(channels)}    Materials: {len(materials)}    "
-            f"Rank: {rank}    Condition: {condition:.3g}"
-        )
+        summary_text = f"Channels: {len(channels)}    Materials: {len(materials)}    Rank: {rank}    Condition: {condition:.3g}"
         ctk.CTkLabel(popup, text=summary_text).pack(pady=(0, 8))
+
+        # --- Filter Selection UI ---
+        combo_container = ctk.CTkFrame(popup, fg_color="#333333")
+        combo_container.pack(fill="x", padx=10, pady=5)
+
+        input_row = ctk.CTkFrame(combo_container, fg_color="transparent")
+        input_row.pack(fill="x", padx=5, pady=5)
+
+        ctk.CTkLabel(input_row, text="Evaluate Best Combinations for N Filters:").pack(side="left", padx=5)
+        n_var = ctk.StringVar(value=str(min(len(materials), len(channels))))
+        ctk.CTkEntry(input_row, textvariable=n_var, width=50).pack(side="left", padx=5)
+
+        self.top_combos = []
+        combo_choice_var = ctk.IntVar(value=0)
+
+        results_row = ctk.CTkFrame(combo_container, fg_color="transparent")
+        results_row.pack(fill="x", padx=5, pady=5)
+
+        def calculate_best_combo():
+            for widget in results_row.winfo_children(): widget.destroy()
+
+            try: n = int(n_var.get())
+            except ValueError: return
+            if n <= 0 or n > len(channels): return
+
+            combo_results = []
+            for combo in itertools.combinations(range(len(channels)), n):
+                sub_mat = matrix[list(combo), :]
+                sub_rank = int(np.linalg.matrix_rank(sub_mat, tol=1e-9))
+
+                if sub_rank < len(materials):
+                    cond = float("inf")
+                else:
+                    s_vals = np.linalg.svd(sub_mat, compute_uv=False)
+                    nonzero_s = s_vals[s_vals > 1e-12]
+                    cond = nonzero_s[0] / nonzero_s[-1] if len(nonzero_s) >= 2 else float("inf")
+
+                combo_results.append((cond, combo))
+
+            combo_results.sort(key=lambda x: x[0])
+            self.top_combos = combo_results[:5]
+            combo_choice_var.set(0)
+
+            ctk.CTkLabel(results_row, text="Top 5 Filter Combinations:", font=("Arial", 12, "bold")).pack(anchor="w", padx=5, pady=(0, 5))
+
+            for i, (cond, combo) in enumerate(self.top_combos):
+                ch_names = [f"{channels[idx]['center']:.0f}nm" for idx in combo]
+                total_price = sum([channels[idx]['price'] for idx in combo])
+
+                lbl_text = f"Rank {i+1} (Condition: {cond:.2f} | Price: ${total_price:.2f}):   {', '.join(ch_names)}"
+                rb = ctk.CTkRadioButton(results_row, text=lbl_text, variable=combo_choice_var, value=i)
+                rb.pack(anchor="w", padx=10, pady=2)
+
+        def apply_combo():
+            if not self.top_combos: return
+            choice_idx = combo_choice_var.get()
+            best_combo_indices = self.top_combos[choice_idx][1]
+            selected_channels = [channels[idx] for idx in best_combo_indices]
+
+            for ch in self.sensor_channels: ch["frame"].destroy()
+            self.sensor_channels.clear()
+
+            for ch in selected_channels:
+                self.add_sensor_ui(center=str(ch["center"]), width=str(ch["width"]), name=ch["name"], sensor_type=ch["sensor_type"], price=str(ch["price"]))
+
+            self.run_live_simulation()
+            popup.destroy()
+
+        ctk.CTkButton(input_row, text="Calculate Options", command=calculate_best_combo).pack(side="left", padx=10)
+        ctk.CTkButton(input_row, text="Apply Selected Combination", command=apply_combo, fg_color="#00aa00", hover_color="#008800").pack(side="left", padx=10)
 
         fig, ax = plt.subplots(figsize=(8, 4.8), facecolor='#2b2b2b')
         ax.set_facecolor('#2b2b2b')
@@ -700,43 +682,35 @@ class WebGaugingApp(ctk.CTk):
         ax.set_xticklabels(materials, color="white")
         ax.set_yticklabels([f"{ch['name']} ({ch['center']:.0f} nm)" for ch in channels], color="white")
         ax.tick_params(colors="white")
-        for spine in ax.spines.values():
-            spine.set_color("gray")
 
         for row_idx in range(len(channels)):
             for col_idx in range(len(materials)):
                 value = matrix[row_idx, col_idx]
                 ax.text(col_idx, row_idx, f"{value:.3g}", ha="center", va="center", color="white", fontsize=8)
 
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.ax.tick_params(colors="white")
+        fig.colorbar(im, ax=ax).ax.tick_params(colors="white")
         fig.tight_layout()
 
         canvas = FigureCanvasTkAgg(fig, master=popup)
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=5)
         canvas.draw()
 
-        table_lines = []
-        table_lines.append("Effective alpha values are in mm^-1.")
-        table_lines.append("Use absorbance A = -ln(signal/reference). Then approximately A = K * thickness.")
-        table_lines.append("")
-        table_lines.append("Channel".ljust(28) + "".join(material.rjust(14) for material in materials) + "    Weight")
+        table_lines = [
+            "Effective alpha values are in mm^-1.",
+            "Use absorbance A = -ln(signal/reference). Then approximately A = K * thickness.",
+            "",
+            "Channel".ljust(28) + "".join(material.rjust(14) for material in materials) + "    Weight"
+        ]
         for row_idx, channel in enumerate(channels):
             name = f"{channel['name']} {channel['center']:.0f}nm"
             values = "".join(f"{matrix[row_idx, col_idx]:14.5g}" for col_idx in range(len(materials)))
             table_lines.append(name[:27].ljust(28) + values + f"    {channel_weights[row_idx]:.3g}")
 
         table_lines.append("")
-        if len(channels) < len(materials):
-            table_lines.append("Warning: fewer channels than materials. Thickness solving is underdetermined.")
-        elif rank < len(materials):
-            table_lines.append("Warning: matrix is rank deficient. Some materials look too similar in these channels.")
-        elif condition > 100:
-            table_lines.append("Warning: high condition number. Small signal noise may cause large thickness errors.")
-        else:
-            table_lines.append("Matrix looks reasonably separable for these modeled curves.")
-
-        table_lines.append("Prefer columns that look different from each other; similar columns are hard to separate.")
+        if len(channels) < len(materials): table_lines.append("Warning: fewer channels than materials.")
+        elif rank < len(materials): table_lines.append("Warning: matrix is rank deficient.")
+        elif condition > 100: table_lines.append("Warning: high condition number.")
+        else: table_lines.append("Matrix looks reasonably separable for these modeled curves.")
 
         text_box = ctk.CTkTextbox(popup, height=170, font=("Consolas", 12))
         text_box.pack(fill="x", padx=10, pady=(5, 10))
@@ -745,6 +719,47 @@ class WebGaugingApp(ctk.CTk):
 
     def show_ranked_combinations(self):
         """Ranks source/filter/sensor combinations from the component database."""
+        def price_value(component, component_kind):
+            value = component.get("price_usd")
+            if value is None:
+                defaults = self.component_database.get("price_defaults_usd", {})
+                value = defaults.get(component_kind, {}).get(component.get("manufacturer"))
+                if value is None:
+                    return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def price_label(component, component_kind):
+            value = price_value(component, component_kind)
+            if value is None:
+                return "price: quote/unknown"
+            label = f"price: ${value:,.2f}"
+            status = component.get("price_status", "default estimate")
+            if status:
+                label += f" ({status})"
+            return label
+
+        def combo_price_summary(result):
+            components = [("source", result["source"])]
+            for channel in result["channels"]:
+                components.append(("filter", channel["filter"]))
+                components.append(("sensor", channel["sensor"]))
+
+            known_total = 0.0
+            unknown_count = 0
+            for component_kind, component in components:
+                value = price_value(component, component_kind)
+                if value is None:
+                    unknown_count += 1
+                else:
+                    known_total += value
+
+            if unknown_count:
+                return f"${known_total:,.2f} + {unknown_count} quote/unknown item(s)"
+            return f"${known_total:,.2f}"
+
         materials = material_names_from_stack(self.material_library, self.web_layers)
         channel_count = max(len(materials), 1)
         results = rank_orthogonal_combinations(
@@ -795,9 +810,13 @@ class WebGaugingApp(ctk.CTk):
             condition_text = f"{condition:.3g}" if np.isfinite(condition) else "inf"
             lines.append(
                 f"{idx:02d}. Score {result['score']:.1f} | Rank {result['rank']}/{len(materials)} | "
-                f"Condition {condition_text} | Orthogonality {result['orthogonality']:.3f}"
+                f"Condition {condition_text} | Orthogonality {result['orthogonality']:.3f} | "
+                f"Set price {combo_price_summary(result)}"
             )
-            lines.append(f"    Source: {result['source']['name']}")
+            source_url = result["source"].get("url", "")
+            lines.append(f"    Source: {result['source']['name']} | {price_label(result['source'], 'source')}")
+            if source_url:
+                lines.append(f"       link: {source_url}")
             for channel_idx, channel in enumerate(result["channels"], start=1):
                 filter_def = channel["filter"]
                 sensor_def = channel["sensor"]
@@ -806,6 +825,8 @@ class WebGaugingApp(ctk.CTk):
                     f"({float(filter_def['center_nm']):.0f} nm / {float(filter_def['fwhm_nm']):.0f} nm) "
                     f"+ {sensor_def['name']} | weight {result['weights'][channel_idx - 1]:.3g}"
                 )
+                lines.append(f"       filter {price_label(filter_def, 'filter')} | link: {filter_def.get('url', 'n/a')}")
+                lines.append(f"       sensor {price_label(sensor_def, 'sensor')} | link: {sensor_def.get('url', 'n/a')}")
             lines.append("    Effective alpha matrix rows are channels, columns are " + ", ".join(materials))
             for row in result["matrix"]:
                 lines.append("       " + " ".join(f"{value:10.4g}" for value in row))
@@ -815,84 +836,58 @@ class WebGaugingApp(ctk.CTk):
         text_box.configure(state="disabled")
 
     # --- Core Physics Engine ---
-
     def run_live_simulation(self):
-        # 1. Prepare the Source Object
         source_spectra = self.get_source_spectra()
         source_obj = LightSource("Source", self.wl, source_spectra)
 
-        # 2. Prepare the Web Stack Objects
         web_stack_objs = []
         for i, layer_data in enumerate(self.web_layers):
             mat = layer_data["mat_var"].get()
-            try: 
-                d = float(layer_data["thick_var"].get())
-            except ValueError: 
-                d = 0.0
-            
-            alpha = self.material_library[mat]["alpha"]
-            n_data = self.material_library[mat]["n"]
-            
+            try: d = float(layer_data["thick_var"].get())
+            except ValueError: d = 0.0
+
             layer_obj = MaterialLayer(
-                name=f"Layer_{i}_{mat}", 
-                thickness=d, 
-                raw_wavelengths=self.wl, 
-                alpha_data=alpha, 
-                n_data=n_data
+                name=f"Layer_{i}_{mat}", thickness=d, raw_wavelengths=self.wl,
+                alpha_data=self.material_library[mat]["alpha"], n_data=self.material_library[mat]["n"]
             )
             web_stack_objs.append(layer_obj)
 
-        # Clear axes
         for ax in (self.ax_top, self.ax_bot):
             ax.clear()
             ax.set_facecolor('#2b2b2b')
             ax.tick_params(colors='white')
-            for spine in ax.spines.values(): 
-                spine.set_color('gray')
+            for spine in ax.spines.values(): spine.set_color('gray')
 
         self.ax_top.set_title("System Optics: Source Emittance & Web Transmission", color='white')
         self.ax_top.set_ylabel("Transmission / Intensity", color='white')
         self.ax_bot.set_title("Filtered Signals Reaching Detectors", color='white')
         self.ax_bot.set_xlabel("Wavelength (nm)", color='white')
 
-        # Plot source output
         self.ax_top.plot(self.wl, source_spectra, color='#aaaaaa', linestyle="--", label="Source Output")
 
         first_channel = True
 
         for ch in self.sensor_channels:
-            try:
-                c_wl = float(ch["center_var"].get())
-                fwhm = float(ch["width_var"].get())
-            except ValueError:
-                c_wl, fwhm = 2000, 10
-            
-            # 3. Prepare Filter and Sensor Objects
+            try: c_wl, fwhm = float(ch["center_var"].get()), float(ch["width_var"].get())
+            except ValueError: c_wl, fwhm = 2000, 10
+
             filter_spectra = gaussian_bandpass(self.wl, c_wl, fwhm, 1.0)
             sensor_spectra = self.get_sensor_spectra(ch["sensor_type_var"].get())
 
             filter_obj = OpticalFilter(f"Filter_{c_wl}", self.wl, filter_spectra)
             sensor_obj = Sensor("Sensor", self.wl, sensor_spectra)
 
-            # 4. RUN SIMULATION USING SHARED ENGINE
             results = run_simulation(self.wl, source_obj, web_stack_objs, filter_obj, sensor_obj)
-            
-            final_signal = results["final_signal"]
-            channel_spectra = results["spectra"]["signal_spectrum"]
-            
-            # Plot the transmitted spectrum (web transmission) just once
+            final_signal, channel_spectra = results["final_signal"], results["spectra"]["signal_spectrum"]
+
             if first_channel:
-                # Multiply bulk and interface transmission for the total realistic curve
                 T_total = results["spectra"]["bulk_transmission"] * results["spectra"]["interface_transmission"]
                 self.ax_top.plot(self.wl, T_total, color='white', label="Transmitted Spectrum (Bulk + Fresnel)")
                 first_channel = False
 
-            # Update UI Readout
             ch["lbl_readout"].configure(text=f"Signal: {final_signal:.2f}")
 
-            name = ch["name_var"].get()
-            color = ch["color"]
-            
+            name, color = ch["name_var"].get(), ch["color"]
             self.ax_top.fill_between(self.wl, 0, filter_spectra, color=color, alpha=0.2)
             self.ax_bot.plot(self.wl, channel_spectra, color=color, label=f"{name} (Signal: {final_signal:.1f})")
             self.ax_bot.fill_between(self.wl, 0, channel_spectra, color=color, alpha=0.5)
@@ -900,7 +895,7 @@ class WebGaugingApp(ctk.CTk):
         self.ax_top.legend(facecolor='#333333', edgecolor='white', labelcolor='white', loc='upper right')
         if self.sensor_channels:
             self.ax_bot.legend(facecolor='#333333', edgecolor='white', labelcolor='white', loc='upper right')
-            
+
         self.fig.tight_layout()
         self.canvas.draw()
 
