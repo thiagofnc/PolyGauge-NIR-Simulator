@@ -4,6 +4,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 import os 
 
+#test
+
 # Import the backend components
 from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
 from Simulation import run_simulation
