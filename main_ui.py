@@ -108,13 +108,16 @@ def alpha_from_k(wl_nm, k):
         return (4 * np.pi * k) / wl_mm
 
 def load_database_file(filepath, master_wl):
-    if not os.path.exists(filepath):
-        print(f"Warning: Could not find '{filepath}'.")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    absolute_filepath = os.path.join(base_dir, filepath)
+
+    if not os.path.exists(absolute_filepath):
+        print(f"Warning: Could not find '{absolute_filepath}'.")
         return None, None
 
     raw_wl, raw_n, raw_k = [], [], []
 
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(absolute_filepath, 'r', encoding='utf-8') as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 2:
@@ -143,6 +146,42 @@ def load_database_file(filepath, master_wl):
 
     return interp_n, interp_k
 
+
+MATERIAL_SOURCE_NOTES = {
+    "PE": {
+        "accuracy": "High from 2.0-4.0 um where PE_data.yml supplies n,k for LLDPE; moderate from 1.0-2.0 um where alpha is a literature-assignment band model.",
+        "sources": [
+            "David et al. 2022 / refractiveindex.info PE David dataset, n,k 2.00-12.3 um.",
+            "Mizushima et al. 2012, PE NIR assignments in the 1650-1900 nm region.",
+            "Shi et al. 2012, CH2-rich polyethylene peaks near 1210, 1730, and 1760 nm.",
+            "General NIR assignment tables: aliphatic C-H first overtone 1700-1800 nm and combination 2300-2400 nm.",
+        ],
+    },
+    "EVOH": {
+        "accuracy": "Moderate for peak positions; low-to-moderate for absolute alpha because no open tabulated EVOH n,k/alpha curve was found for 1.0-4.0 um.",
+        "sources": [
+            "Iwamoto et al. 2001, EVOH FT-NIR OH combination at about 4780 cm^-1 and shoulder/peak at 4970 cm^-1.",
+            "Su et al. 2015 and EVOH FTIR studies for hydrogen-bonded OH and CH stretching fundamentals.",
+            "General NIR assignment tables for O-H overtone/combination and aliphatic C-H overtones/combinations.",
+        ],
+    },
+    "Nylon 6": {
+        "accuracy": "Moderate for peak positions; low-to-moderate for absolute alpha because open tabulated Nylon 6 n,k/alpha data was not found for this exact range.",
+        "sources": [
+            "Noda et al. 2016, Nylon 6 NIR bands at 1485 nm and 1535 nm for amorphous/crystalline structure.",
+            "Noda et al. 2018, PA6 CH2 combination bands at 2300 nm and 2355 nm.",
+            "Wu and Siesler 1999, polyamide NIR overtone/combination assignments transferable to aliphatic polyamides.",
+            "General IR/NIR assignment tables for N-H, O-H, and C-H overtone/combination regions.",
+        ],
+    },
+    "Water": {
+        "accuracy": "High for pure liquid water where Water_data.yml supplies Hale-Querry n,k at 25 C.",
+        "sources": [
+            "Hale and Querry 1973 / refractiveindex.info water dataset, n,k 0.2-200 um at 25 C.",
+        ],
+    },
+}
+
 # Set UI Theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -160,18 +199,51 @@ class WebGaugingApp(ctk.CTk):
         self.colors = ['#00ffcc', '#ff3366', '#ffcc00', '#cc33ff', '#33ccff']
 
         self.material_library = {
-            "Air": {"alpha": np.zeros_like(self.wl), "n": 1.0},
+            "Air": {"alpha": np.zeros_like(self.wl), "n": 1.0, "accuracy": "Exact for a non-absorbing reference medium in this simplified model.", "sources": []},
             "PE": {
-                "alpha": band_model(self.wl, [(1210, 35, 0.20), (1730, 24, 0.85), (1764, 24, 0.55), (2310, 32, 2.00), (2350, 32, 1.35)]),
+                "alpha": band_model(self.wl, [
+                    (1210, 34, 0.16),  # CH2 second overtone.
+                    (1410, 58, 0.12),  # CH2 stretch + deformation combination envelope.
+                    (1690, 24, 0.18),  # CH3 branch/end-group contribution in LDPE/LLDPE.
+                    (1710, 24, 0.22),  # CH3 chain-end contribution in LDPE/LLDPE.
+                    (1730, 23, 1.00),  # CH2 first-overtone dominant band.
+                    (1760, 25, 0.65),  # CH2 first-overtone shoulder.
+                    (2310, 32, 2.20),  # Aliphatic C-H stretch + bend combination.
+                    (2350, 34, 1.40),  # Aliphatic C-H stretch + bend combination shoulder.
+                ]),
                 "n": 1.51,
+                **MATERIAL_SOURCE_NOTES["PE"],
             },
             "EVOH": {
-                "alpha": band_model(self.wl, [(1410, 28, 0.45), (2012, 38, 0.90), (2092, 48, 1.80), (2310, 35, 0.45), (3000, 90, 18.0), (3305, 110, 12.0)]),
-                "n": 1.52,
+                "alpha": band_model(self.wl, [
+                    (1410, 42, 0.55),  # O-H first overtone / hydrogen-bond-sensitive envelope.
+                    (1730, 28, 0.35),  # Ethylene CH2 first overtone.
+                    (1760, 30, 0.25),  # Ethylene CH2 first-overtone shoulder.
+                    (2012, 42, 0.90),  # 4970 cm^-1 OH combination shoulder/peak.
+                    (2092, 55, 1.90),  # 4780 cm^-1 aggregated-OH combination.
+                    (2310, 36, 0.55),  # Ethylene CH stretch + bend combination.
+                    (2350, 38, 0.38),  # Ethylene CH combination shoulder.
+                    (3003, 105, 18.0), # 3330 cm^-1 hydrogen-bonded O-H stretch fundamental.
+                    (3409, 80, 9.5),   # 2933 cm^-1 CH2 asymmetric stretch fundamental.
+                    (3506, 82, 7.0),   # 2852 cm^-1 CH2 symmetric stretch fundamental.
+                ]),
+                "n": 1.53,
+                **MATERIAL_SOURCE_NOTES["EVOH"],
             },
             "Nylon 6": {
-                "alpha": band_model(self.wl, [(1485, 28, 0.75), (1535, 30, 1.20), (2040, 42, 1.50), (2300, 35, 0.55), (2355, 35, 0.55), (3030, 75, 18.0), (3410, 80, 8.0), (3500, 85, 6.0)]),
+                "alpha": band_model(self.wl, [
+                    (1485, 28, 0.85),  # N-H first overtone, amorphous PA6 contribution.
+                    (1535, 30, 1.20),  # N-H first overtone, crystalline PA6 contribution.
+                    (1940, 70, 0.18),  # Residual moisture sensitivity; intentionally weak for dry PA6.
+                    (2040, 44, 1.55),  # N-H stretch + amide/combination region.
+                    (2300, 35, 0.60),  # CH2 combination from crystalline/rigid chains.
+                    (2355, 35, 0.62),  # CH2 combination from amorphous/rubbery chains.
+                    (3039, 76, 18.0),  # 3291 cm^-1 N-H stretching fundamental.
+                    (3410, 82, 8.0),   # CH2 asymmetric stretch fundamental.
+                    (3505, 86, 6.0),   # CH2 symmetric stretch fundamental.
+                ]),
                 "n": 1.53,
+                **MATERIAL_SOURCE_NOTES["Nylon 6"],
             },
             # "Nylon 66": {
             #     "alpha": band_model(self.wl, [(1515, 32, 0.95), (1565, 34, 1.10), (2025, 42, 1.25), (2075, 45, 1.45), (2295, 35, 0.65), (2350, 36, 0.70), (3060, 78, 17.0), (3415, 82, 8.5), (3505, 88, 6.5)]),
@@ -181,19 +253,24 @@ class WebGaugingApp(ctk.CTk):
 
         pe_n, pe_k = load_database_file("PE_data.yml", self.wl)
         if pe_k is not None:
-            measured_region = self.wl >= 2600
+            measured_region = self.wl >= 2000
             pe_alpha = self.material_library["PE"]["alpha"].copy()
             pe_alpha[measured_region] = alpha_from_k(self.wl, pe_k)[measured_region]
             pe_n_combined = np.full_like(self.wl, 1.51, dtype=float)
             if pe_n is not None:
                 pe_n_combined[measured_region] = pe_n[measured_region]
-            self.material_library["PE"] = {"alpha": pe_alpha, "n": pe_n_combined}
+            self.material_library["PE"] = {"alpha": pe_alpha, "n": pe_n_combined, **MATERIAL_SOURCE_NOTES["PE"]}
 
         water_n, water_k = load_database_file("Water_data.yml", self.wl)
         if water_k is not None:
-            self.material_library["Water"] = {"alpha": alpha_from_k(self.wl, water_k), "n": water_n if water_n is not None else 1.33}
+            self.material_library["Water"] = {"alpha": alpha_from_k(self.wl, water_k), "n": water_n if water_n is not None else 1.33, **MATERIAL_SOURCE_NOTES["Water"]}
         else:
-            self.material_library["Water"] = {"alpha": band_model(self.wl, [(1450, 55, 12.0), (1940, 70, 40.0)]), "n": 1.33}
+            self.material_library["Water"] = {
+                "alpha": band_model(self.wl, [(1450, 55, 12.0), (1940, 70, 40.0)]),
+                "n": 1.33,
+                "accuracy": "Moderate fallback only; Water_data.yml was not available.",
+                "sources": MATERIAL_SOURCE_NOTES["Water"]["sources"],
+            }
 
 
         # --- LOAD CUSTOM EXTRACTED CSV DATA ---
@@ -201,22 +278,47 @@ class WebGaugingApp(ctk.CTk):
         pe_csv = load_csv_spectrum("PETransissionPercentVsWavelength_in_nm_2000nm_to_5000nm.csv", 
                                    self.wl, x_type='nm', y_type='transmission', nominal_thickness_mm=0.05)
         if np.any(pe_csv):
-            self.material_library["PE (Extracted)"] = {"alpha": pe_csv, "n": 1.51}
+            self.material_library["PE (Extracted)"] = {
+                "alpha": pe_csv,
+                "n": 1.51,
+                "accuracy": "Low-to-moderate: digitized local transmission curve with assumed 0.05 mm thickness; useful as an empirical comparison, not a certified optical-constant dataset.",
+                "sources": ["Local CSV: PETransissionPercentVsWavelength_in_nm_2000nm_to_5000nm.csv"],
+            }
 
         evoh_trans = load_csv_spectrum("EVOHTransmissionPercentvsWavelength_in_nm_2000nm_to_5000nm.csv", 
                                        self.wl, x_type='nm', y_type='transmission', nominal_thickness_mm=0.015)
         if np.any(evoh_trans):
-            self.material_library["EVOH 2-5um (Extracted)"] = {"alpha": evoh_trans, "n": 1.52}
+            self.material_library["EVOH 2-5um (Extracted)"] = {
+                "alpha": evoh_trans,
+                "n": 1.53,
+                "accuracy": "Low-to-moderate: digitized local transmission curve with assumed 0.015 mm thickness; strongest peaks are plausible but absolute alpha depends on the true film thickness and digitization.",
+                "sources": ["Local CSV: EVOHTransmissionPercentvsWavelength_in_nm_2000nm_to_5000nm.csv"],
+            }
 
         evoh_int_5k = load_csv_spectrum("EVOH_Intensity_vs_Wavenumber_in_inverse_cm_5555nmto9090nm.csv", 
                                         self.wl, x_type='cm^-1', y_type='intensity')
         if np.any(evoh_int_5k):
-            self.material_library["EVOH 5-9um (Extracted)"] = {"alpha": evoh_int_5k, "n": 1.52}
+            self.material_library["EVOH 5-9um (Extracted)"] = {
+                "alpha": evoh_int_5k,
+                "n": 1.53,
+                "accuracy": "Low: local intensity trace is not calibrated to absorption coefficient.",
+                "sources": ["Local CSV: EVOH_Intensity_vs_Wavenumber_in_inverse_cm_5555nmto9090nm.csv"],
+            }
 
         evoh_int_3k = load_csv_spectrum("EVOH_Intensity_vs_Wavenumber_in_inverse_cm_3225nmto4000nm.csv", 
                                         self.wl, x_type='cm^-1', y_type='intensity')
         if np.any(evoh_int_3k):
-            self.material_library["EVOH 3-4um (Extracted)"] = {"alpha": evoh_int_3k, "n": 1.52}
+            self.material_library["EVOH 3-4um (Extracted)"] = {
+                "alpha": evoh_int_3k,
+                "n": 1.53,
+                "accuracy": "Low: local intensity trace is not calibrated to absorption coefficient.",
+                "sources": ["Local CSV: EVOH_Intensity_vs_Wavenumber_in_inverse_cm_3225nmto4000nm.csv"],
+            }
+
+        self.material_display_vars = {
+            name: ctk.BooleanVar(value=(name != "Air"))
+            for name in self.material_library
+        }
 
         self.setup_ui()
         self.run_live_simulation()
@@ -264,6 +366,19 @@ class WebGaugingApp(ctk.CTk):
 
         ctk.CTkButton(self.stack_panel, text="+ Add Layer", command=self.add_layer_ui).pack(pady=10)
         ctk.CTkButton(self.stack_panel, text="Compare Absorbance Curves", command=self.show_all_material_spectra).pack(pady=(0, 10))
+
+        ctk.CTkLabel(self.stack_panel, text="Displayed Materials", font=("Arial", 14, "bold")).pack(pady=(5, 0))
+        self.material_display_container = ctk.CTkScrollableFrame(self.stack_panel, height=130)
+        self.material_display_container.pack(fill="x", padx=5, pady=(5, 10))
+        for mat_name, display_var in self.material_display_vars.items():
+            if mat_name == "Air":
+                continue
+            ctk.CTkCheckBox(
+                self.material_display_container,
+                text=mat_name,
+                variable=display_var,
+                command=self.run_live_simulation,
+            ).pack(anchor="w", padx=5, pady=3)
 
         self.add_layer_ui(mat="PE", thick="0.05")
         self.add_layer_ui(mat="EVOH", thick="0.015")
@@ -411,8 +526,26 @@ class WebGaugingApp(ctk.CTk):
 
         return channels
 
+    def get_displayed_material_names(self, include_air=False):
+        displayed = []
+        for name in self.material_library:
+            if not include_air and name == "Air":
+                continue
+
+            display_var = self.material_display_vars.get(name)
+            if display_var is None or display_var.get():
+                displayed.append(name)
+
+        return displayed
+
+    def is_material_displayed(self, mat_name):
+        if mat_name == "Air":
+            return True
+        display_var = self.material_display_vars.get(mat_name)
+        return display_var is None or display_var.get()
+
     def show_material_spectra(self, mat_name):
-        if mat_name not in self.material_library:
+        if mat_name not in self.material_library or not self.is_material_displayed(mat_name):
             return
 
         data = self.material_library[mat_name]
@@ -507,8 +640,8 @@ class WebGaugingApp(ctk.CTk):
             for spine in ax.spines.values(): spine.set_color('gray')
 
         plotted = []
-        for mat_name, data in self.material_library.items():
-            if mat_name == "Air": continue
+        for mat_name in self.get_displayed_material_names():
+            data = self.material_library[mat_name]
 
             alpha = np.asarray(data["alpha"], dtype=float)
             color = colors.get(mat_name, None)
@@ -528,8 +661,12 @@ class WebGaugingApp(ctk.CTk):
         ax_norm.set_xlabel("Wavelength (nm)", color='white')
         ax_norm.set_ylabel("Relative alpha", color='white')
 
-        for ax in (ax_raw, ax_norm):
-            ax.legend(facecolor='#333333', edgecolor='white', labelcolor='white', loc='upper right')
+        if plotted:
+            for ax in (ax_raw, ax_norm):
+                ax.legend(facecolor='#333333', edgecolor='white', labelcolor='white', loc='upper right')
+        else:
+            ax_raw.text(0.5, 0.5, "No materials selected", transform=ax_raw.transAxes, ha="center", va="center", color="white")
+            ax_norm.text(0.5, 0.5, "Select materials in the main panel", transform=ax_norm.transAxes, ha="center", va="center", color="white")
 
         # --- Filter Overlay Logic ---
         ax_raw_twin = ax_raw.twinx()
@@ -632,9 +769,9 @@ class WebGaugingApp(ctk.CTk):
 
     def show_channel_matrix(self):
         channels = self.get_channel_definitions()
-        materials = [name for name in self.material_library.keys() if name != "Air"]
+        materials = self.get_displayed_material_names()
 
-        if not channels: return
+        if not channels or not materials: return
 
         source_spectra = self.get_source_spectra()
         matrix = np.zeros((len(channels), len(materials)), dtype=float)
@@ -835,7 +972,22 @@ class WebGaugingApp(ctk.CTk):
                 return f"${known_total:,.2f} + {unknown_count} quote/unknown item(s)"
             return f"${known_total:,.2f}"
 
-        materials = material_names_from_stack(self.material_library, self.web_layers)
+        materials = [
+            material for material in material_names_from_stack(self.material_library, self.web_layers)
+            if self.is_material_displayed(material)
+        ]
+        if not materials:
+            popup = ctk.CTkToplevel(self)
+            popup.title("Ranked Filter / Source / Sensor Combos")
+            popup.geometry("520x160")
+            popup.attributes("-topmost", True)
+            ctk.CTkLabel(
+                popup,
+                text="Select at least one displayed material before ranking combinations.",
+                font=("Arial", 14, "bold"),
+            ).pack(expand=True, padx=20, pady=20)
+            return
+
         channel_count = max(len(materials), 1)
         results = rank_orthogonal_combinations(
             self.wl,
