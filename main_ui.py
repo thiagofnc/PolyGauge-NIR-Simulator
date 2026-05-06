@@ -5,12 +5,64 @@ import matplotlib.pyplot as plt
 import os
 import csv
 import itertools
+import pandas as pd
 
 # Import the backend components
 from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
 from Simulation import run_simulation
 from ComponentDatabase import load_component_database
 from ChannelOptimizer import material_names_from_stack, rank_orthogonal_combinations
+
+def load_csv_spectrum(filepath, master_wl, x_type='nm', y_type='transmission', nominal_thickness_mm=0.05):
+    """
+    Loads raw pixel data from CSV, converts units to nm and alpha, 
+    and maps it to the simulation's master wavelength array.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    absolute_filepath = os.path.join(base_dir, filepath)
+
+    if not os.path.exists(absolute_filepath):
+        print(f"Warning: Could not find '{absolute_filepath}'.")
+        return np.zeros_like(master_wl)
+
+    try:
+        # Use the absolute_filepath here instead of filepath
+        df = pd.read_csv(absolute_filepath, skipinitialspace=True)
+        # Check for column names, otherwise fall back to indexes
+        if 'x' in df.columns and 'y' in df.columns:
+            x = df['x'].values
+            y = df['y'].values
+        else:
+            x = df.iloc[:, 0].values
+            y = df.iloc[:, 1].values
+    except Exception as e:
+        print(f"Error loading {absolute_filepath}: {e}")
+        return np.zeros_like(master_wl)
+
+    # 1. Convert X-axis to Nanometers
+    if x_type == 'cm^-1':
+        wl_nm = 1e7 / x
+    else: # 'nm'
+        wl_nm = x
+
+    # Sort arrays because numpy interpolation requires strictly increasing X values
+    sort_idx = np.argsort(wl_nm)
+    wl_nm = wl_nm[sort_idx]
+    y = y[sort_idx]
+
+    # 2. Convert Y-axis to Absorption Coefficient (alpha) in mm^-1
+    if y_type == 'transmission':
+        # Beer-Lambert: Transmission T = exp(-alpha * thickness) -> alpha = -ln(T) / thickness
+        y_clipped = np.clip(y, 1e-6, 1.0) # Prevent math domain errors from 0 or negative values
+        alpha = -np.log(y_clipped) / nominal_thickness_mm
+    else:
+        # If it's already an Intensity/Absorbance measure, use it directly.
+        alpha = y
+
+    # 3. Interpolate onto the master simulation wavelength array
+    # We use left=0.0, right=0.0 so we don't extrapolate garbage outside the dataset's bounds
+    interp_alpha = np.interp(master_wl, wl_nm, alpha, left=0.0, right=0.0)
+    return interp_alpha
 
 # --- Physics & Data Helpers ---
 def gaussian_peak(wl, center, width, amplitude):
@@ -101,7 +153,7 @@ class WebGaugingApp(ctk.CTk):
         self.title("PolyGauge NIR Simulator")
         self.geometry("1400x850")
 
-        self.wl = np.arange(1000, 4001, 1.0)
+        self.wl = np.arange(1000, 4000, 1.0)
         self.web_layers = []
         self.sensor_channels = []
         self.component_database = load_component_database()
@@ -142,6 +194,29 @@ class WebGaugingApp(ctk.CTk):
             self.material_library["Water"] = {"alpha": alpha_from_k(self.wl, water_k), "n": water_n if water_n is not None else 1.33}
         else:
             self.material_library["Water"] = {"alpha": band_model(self.wl, [(1450, 55, 12.0), (1940, 70, 40.0)]), "n": 1.33}
+
+
+        # --- LOAD CUSTOM EXTRACTED CSV DATA ---
+        
+        pe_csv = load_csv_spectrum("PETransissionPercentVsWavelength_in_nm_2000nm_to_5000nm.csv", 
+                                   self.wl, x_type='nm', y_type='transmission', nominal_thickness_mm=0.05)
+        if np.any(pe_csv):
+            self.material_library["PE (Extracted)"] = {"alpha": pe_csv, "n": 1.51}
+
+        evoh_trans = load_csv_spectrum("EVOHTransmissionPercentvsWavelength_in_nm_2000nm_to_5000nm.csv", 
+                                       self.wl, x_type='nm', y_type='transmission', nominal_thickness_mm=0.015)
+        if np.any(evoh_trans):
+            self.material_library["EVOH 2-5um (Extracted)"] = {"alpha": evoh_trans, "n": 1.52}
+
+        evoh_int_5k = load_csv_spectrum("EVOH_Intensity_vs_Wavenumber_in_inverse_cm_5555nmto9090nm.csv", 
+                                        self.wl, x_type='cm^-1', y_type='intensity')
+        if np.any(evoh_int_5k):
+            self.material_library["EVOH 5-9um (Extracted)"] = {"alpha": evoh_int_5k, "n": 1.52}
+
+        evoh_int_3k = load_csv_spectrum("EVOH_Intensity_vs_Wavenumber_in_inverse_cm_3225nmto4000nm.csv", 
+                                        self.wl, x_type='cm^-1', y_type='intensity')
+        if np.any(evoh_int_3k):
+            self.material_library["EVOH 3-4um (Extracted)"] = {"alpha": evoh_int_3k, "n": 1.52}
 
         self.setup_ui()
         self.run_live_simulation()
