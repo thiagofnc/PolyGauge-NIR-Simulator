@@ -1,11 +1,13 @@
 import customtkinter as ctk
 import numpy as np
+import tkinter as tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 import os
 import csv
 import itertools
 import pandas as pd
+from scipy.optimize import nnls
 
 # Import the backend components
 from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
@@ -397,6 +399,8 @@ class WebGaugingApp(ctk.CTk):
                       fg_color="#00aa00", hover_color="#008800", font=("Arial", 16, "bold"), height=40).pack(fill="x", padx=20, pady=10)
         ctk.CTkButton(self.data_panel, text="CHANNEL MATRIX", command=self.show_channel_matrix,
                       fg_color="#0055aa", hover_color="#0077cc", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkButton(self.data_panel, text="SOLVE THICKNESSES", command=self.show_thickness_solver,
+                      fg_color="#0a7c66", hover_color="#0d9479", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkButton(self.data_panel, text="RANK FILTER COMBOS", command=self.show_ranked_combinations,
                       fg_color="#6b3fa0", hover_color="#7d51bd", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
 
@@ -525,6 +529,52 @@ class WebGaugingApp(ctk.CTk):
             })
 
         return channels
+
+    def build_effective_channel_matrix(self, channels, materials):
+        source_spectra = self.get_source_spectra()
+        matrix = np.zeros((len(channels), len(materials)), dtype=float)
+        channel_weights = np.zeros(len(channels), dtype=float)
+
+        for row_idx, channel in enumerate(channels):
+            filter_spectra = gaussian_bandpass(self.wl, channel["center"], channel["width"], 1.0)
+            sensor_spectra = self.get_sensor_spectra(channel["sensor_type"])
+            weight = source_spectra * filter_spectra * sensor_spectra
+            weight_area = np.trapezoid(weight, self.wl)
+            channel_weights[row_idx] = weight_area
+
+            if weight_area <= 0:
+                continue
+
+            for col_idx, material in enumerate(materials):
+                alpha = np.asarray(self.material_library[material]["alpha"], dtype=float)
+                matrix[row_idx, col_idx] = np.trapezoid(weight * alpha, self.wl) / weight_area
+
+        return matrix, channel_weights
+
+    def build_web_stack_objects(self):
+        web_stack_objs = []
+        for i, layer_data in enumerate(self.web_layers):
+            mat = layer_data["mat_var"].get()
+            try:
+                thickness = float(layer_data["thick_var"].get())
+            except ValueError:
+                thickness = 0.0
+
+            web_stack_objs.append(MaterialLayer(
+                name=f"Layer_{i}_{mat}",
+                thickness=thickness,
+                raw_wavelengths=self.wl,
+                alpha_data=self.material_library[mat]["alpha"],
+                n_data=self.material_library[mat]["n"],
+            ))
+
+        return web_stack_objs
+
+    def get_unique_stack_materials(self):
+        return [
+            material for material in material_names_from_stack(self.material_library, self.web_layers)
+            if self.is_material_displayed(material)
+        ]
 
     def get_displayed_material_names(self, include_air=False):
         displayed = []
@@ -767,30 +817,152 @@ class WebGaugingApp(ctk.CTk):
         canvas.mpl_connect("button_press_event", on_click)
         canvas.draw()
 
+    def show_thickness_solver(self):
+        channels = self.get_channel_definitions()
+        materials = self.get_unique_stack_materials()
+
+        if not channels or not materials:
+            popup = ctk.CTkToplevel(self)
+            popup.title("Solve Thicknesses")
+            popup.geometry("560x180")
+            popup.attributes("-topmost", True)
+            ctk.CTkLabel(
+                popup,
+                text="Add at least one channel and one non-air material layer before solving.",
+                font=("Arial", 14, "bold"),
+            ).pack(expand=True, padx=20, pady=20)
+            return
+
+        matrix, reference_signals = self.build_effective_channel_matrix(channels, materials)
+        source_obj = LightSource("Source", self.wl, self.get_source_spectra())
+        web_stack_objs = self.build_web_stack_objects()
+
+        measured_signals = []
+        for channel in channels:
+            filter_spectra = gaussian_bandpass(self.wl, channel["center"], channel["width"], 1.0)
+            sensor_spectra = self.get_sensor_spectra(channel["sensor_type"])
+            filter_obj = OpticalFilter(f"Filter_{channel['center']}", self.wl, filter_spectra)
+            sensor_obj = Sensor("Sensor", self.wl, sensor_spectra)
+            results = run_simulation(self.wl, source_obj, web_stack_objs, filter_obj, sensor_obj)
+            measured_signals.append(results["final_signal"])
+
+        measured_signals = np.asarray(measured_signals, dtype=float)
+        safe_reference = np.clip(reference_signals, 1e-12, None)
+        safe_measured = np.clip(measured_signals, 1e-12, None)
+        absorbance = -np.log(safe_measured / safe_reference)
+
+        active_rows = reference_signals > 1e-9
+        solve_matrix = matrix[active_rows, :]
+        solve_absorbance = absorbance[active_rows]
+
+        rank = int(np.linalg.matrix_rank(solve_matrix, tol=1e-9)) if solve_matrix.size else 0
+        singular_values = np.linalg.svd(solve_matrix, compute_uv=False) if solve_matrix.size else np.array([])
+        nonzero_singular_values = singular_values[singular_values > 1e-12]
+        condition = (
+            nonzero_singular_values[0] / nonzero_singular_values[-1]
+            if len(nonzero_singular_values) >= 2
+            else float("inf")
+        )
+
+        if solve_matrix.size:
+            least_squares_solution, residuals, _, _ = np.linalg.lstsq(solve_matrix, solve_absorbance, rcond=None)
+            nnls_solution, nnls_residual_norm = nnls(solve_matrix, solve_absorbance)
+            predicted_absorbance = solve_matrix @ nnls_solution
+            residual_vector = solve_absorbance - predicted_absorbance
+            rms_residual = float(np.sqrt(np.mean(residual_vector ** 2))) if residual_vector.size else 0.0
+        else:
+            least_squares_solution = np.zeros(len(materials))
+            nnls_solution = np.zeros(len(materials))
+            nnls_residual_norm = float("nan")
+            residuals = np.array([])
+            rms_residual = float("nan")
+
+        actual_totals = {material: 0.0 for material in materials}
+        for layer in self.web_layers:
+            material = layer["mat_var"].get()
+            if material not in actual_totals:
+                continue
+            try:
+                actual_totals[material] += float(layer["thick_var"].get())
+            except ValueError:
+                pass
+
+        popup = ctk.CTkToplevel(self)
+        popup.title("Solve Thicknesses")
+        popup.geometry("1000x720")
+        popup.attributes("-topmost", True)
+
+        ctk.CTkLabel(
+            popup,
+            text="Solved material thicknesses from selected channels and simulated signals",
+            font=("Arial", 16, "bold"),
+        ).pack(pady=(10, 4))
+
+        condition_text = f"{condition:.3g}" if np.isfinite(condition) else "inf"
+        summary = (
+            f"Channels used: {int(np.count_nonzero(active_rows))}/{len(channels)}    "
+            f"Materials: {len(materials)}    Rank: {rank}/{len(materials)}    "
+            f"Condition: {condition_text}"
+        )
+        ctk.CTkLabel(popup, text=summary).pack(pady=(0, 8))
+
+        text_box = ctk.CTkTextbox(popup, font=("Consolas", 12))
+        text_box.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+
+        lines = [
+            "This solves A = K * thickness, where A = -ln(measured signal / open-beam signal).",
+            "NNLS is the recommended estimate because thickness cannot be negative.",
+            "Interface/Fresnel effects are included in the simulated measured signals, so large residuals can indicate model mismatch or weak channels.",
+            "",
+            "Material".ljust(24) + "Actual mm".rjust(14) + "NNLS mm".rjust(14) + "LeastSq mm".rjust(14),
+        ]
+
+        for idx, material in enumerate(materials):
+            lines.append(
+                material[:23].ljust(24)
+                + f"{actual_totals[material]:14.6g}"
+                + f"{nnls_solution[idx]:14.6g}"
+                + f"{least_squares_solution[idx]:14.6g}"
+            )
+
+        ls_residual_text = f"{float(np.sum(residuals)):.6g}" if residuals.size else "n/a"
+        lines.extend([
+            "",
+            f"NNLS residual norm: {nnls_residual_norm:.6g}",
+            f"NNLS RMS absorbance residual: {rms_residual:.6g}",
+            f"Least-squares summed residual: {ls_residual_text}",
+            "",
+            "Channel".ljust(30) + "Signal".rjust(14) + "Open beam".rjust(14) + "Absorbance".rjust(14),
+        ])
+
+        for idx, channel in enumerate(channels):
+            active_marker = "" if active_rows[idx] else "  low-ref"
+            name = f"{channel['name']} {channel['center']:.0f}nm"
+            lines.append(
+                name[:29].ljust(30)
+                + f"{measured_signals[idx]:14.6g}"
+                + f"{reference_signals[idx]:14.6g}"
+                + f"{absorbance[idx]:14.6g}"
+                + active_marker
+            )
+
+        if len(channels) < len(materials):
+            lines.extend(["", "Warning: fewer channels than materials. The solve is underdetermined."])
+        elif rank < len(materials):
+            lines.extend(["", "Warning: active channel matrix is rank deficient. Some materials cannot be separated."])
+        elif condition > 100:
+            lines.extend(["", "Warning: high condition number. Small signal errors can create large thickness errors."])
+
+        text_box.insert("1.0", "\n".join(lines))
+        text_box.configure(state="disabled")
+
     def show_channel_matrix(self):
         channels = self.get_channel_definitions()
         materials = self.get_displayed_material_names()
 
         if not channels or not materials: return
 
-        source_spectra = self.get_source_spectra()
-        matrix = np.zeros((len(channels), len(materials)), dtype=float)
-        channel_weights = []
-
-        for row_idx, channel in enumerate(channels):
-            filter_spectra = gaussian_bandpass(self.wl, channel["center"], channel["width"], 1.0)
-            sensor_spectra = self.get_sensor_spectra(channel["sensor_type"])
-            weight = source_spectra * filter_spectra * sensor_spectra
-            weight_area = np.trapezoid(weight, self.wl)
-            channel_weights.append(weight_area)
-
-            for col_idx, material in enumerate(materials):
-                alpha = np.asarray(self.material_library[material]["alpha"], dtype=float)
-                if weight_area > 0:
-                    matrix[row_idx, col_idx] = np.trapezoid(weight * alpha, self.wl) / weight_area
-                else:
-                    matrix[row_idx, col_idx] = 0.0
-
+        matrix, channel_weights = self.build_effective_channel_matrix(channels, materials)
         singular_values = np.linalg.svd(matrix, compute_uv=False)
         nonzero_singular_values = singular_values[singular_values > 1e-12]
         rank = int(np.linalg.matrix_rank(matrix, tol=1e-9))
@@ -877,7 +1049,9 @@ class WebGaugingApp(ctk.CTk):
         ctk.CTkButton(input_row, text="Calculate Options", command=calculate_best_combo).pack(side="left", padx=10)
         ctk.CTkButton(input_row, text="Apply Selected Combination", command=apply_combo, fg_color="#00aa00", hover_color="#008800").pack(side="left", padx=10)
 
-        fig, ax = plt.subplots(figsize=(8, 4.8), facecolor='#2b2b2b')
+        fig_width = max(8.0, 1.25 * len(materials) + 3.0)
+        fig_height = max(4.8, 0.52 * len(channels) + 2.6)
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor='#2b2b2b')
         ax.set_facecolor('#2b2b2b')
 
         if np.nanmax(matrix) > 0:
@@ -891,7 +1065,7 @@ class WebGaugingApp(ctk.CTk):
         ax.set_title(image_label, color="white")
         ax.set_xticks(np.arange(len(materials)))
         ax.set_yticks(np.arange(len(channels)))
-        ax.set_xticklabels(materials, color="white")
+        ax.set_xticklabels(materials, color="white", rotation=35 if len(materials) > 5 else 0, ha="right" if len(materials) > 5 else "center")
         ax.set_yticklabels([f"{ch['name']} ({ch['center']:.0f} nm)" for ch in channels], color="white")
         ax.tick_params(colors="white")
 
@@ -903,9 +1077,32 @@ class WebGaugingApp(ctk.CTk):
         fig.colorbar(im, ax=ax).ax.tick_params(colors="white")
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=popup)
-        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=5)
+        plot_container = ctk.CTkFrame(popup)
+        plot_container.pack(fill="both", expand=True, padx=10, pady=5)
+
+        scroll_canvas = tk.Canvas(plot_container, bg="#2b2b2b", highlightthickness=0)
+        y_scroll = tk.Scrollbar(plot_container, orient="vertical", command=scroll_canvas.yview)
+        x_scroll = tk.Scrollbar(plot_container, orient="horizontal", command=scroll_canvas.xview)
+        scroll_canvas.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        y_scroll.pack(side="right", fill="y")
+        x_scroll.pack(side="bottom", fill="x")
+        scroll_canvas.pack(side="left", fill="both", expand=True)
+
+        plot_frame = tk.Frame(scroll_canvas, bg="#2b2b2b")
+        scroll_canvas.create_window((0, 0), window=plot_frame, anchor="nw")
+
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack()
+        canvas_widget.configure(width=int(fig_width * fig.dpi), height=int(fig_height * fig.dpi))
+
+        def update_scroll_region(_event=None):
+            scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+
+        plot_frame.bind("<Configure>", update_scroll_region)
         canvas.draw()
+        update_scroll_region()
 
         table_lines = [
             "Effective alpha values are in mm^-1.",
@@ -1066,18 +1263,7 @@ class WebGaugingApp(ctk.CTk):
     def run_live_simulation(self):
         source_spectra = self.get_source_spectra()
         source_obj = LightSource("Source", self.wl, source_spectra)
-
-        web_stack_objs = []
-        for i, layer_data in enumerate(self.web_layers):
-            mat = layer_data["mat_var"].get()
-            try: d = float(layer_data["thick_var"].get())
-            except ValueError: d = 0.0
-
-            layer_obj = MaterialLayer(
-                name=f"Layer_{i}_{mat}", thickness=d, raw_wavelengths=self.wl,
-                alpha_data=self.material_library[mat]["alpha"], n_data=self.material_library[mat]["n"]
-            )
-            web_stack_objs.append(layer_obj)
+        web_stack_objs = self.build_web_stack_objects()
 
         for ax in (self.ax_top, self.ax_bot):
             ax.clear()
