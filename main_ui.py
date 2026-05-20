@@ -4,7 +4,6 @@ import tkinter as tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 import os
-import csv
 import itertools
 import pandas as pd
 from scipy.optimize import nnls
@@ -406,23 +405,19 @@ class WebGaugingApp(ctk.CTk):
 
     # --- UI Builders ---
     def add_sensors_from_db(self):
-        filepath = "filters_database.csv"
-        if not os.path.exists(filepath):
-            print(f"Database file '{filepath}' not found.")
-            return
+        for filter_def in self.component_database.get("filters", []):
+            center = filter_def.get("center_nm")
+            width = filter_def.get("fwhm_nm")
+            if center is None or width is None:
+                continue
 
-        with open(filepath, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                center = row.get("Center (nm)", "").strip()
-                width = row.get("FWHM (nm)", "").strip()
-                extra = row.get("Extra Info", "").strip()
-                prod = row.get("Product Name", "").strip()
-                price_str = row.get("Price", "150").replace('$', '').strip()
+            price = filter_def.get("price_usd", "")
+            name = filter_def.get("name", f"{center} nm")
+            notes = filter_def.get("notes")
+            if notes:
+                name = f"{notes} ({name})"
 
-                name = f"{extra} ({prod})" if extra else prod
-                if center and width:
-                    self.add_sensor_ui(center=center, width=width, name=name, price=price_str)
+            self.add_sensor_ui(center=str(center), width=str(width), name=name, price=str(price))
 
     def add_layer_ui(self, mat="PE", thick="0.05"):
         if mat not in self.material_library:
@@ -958,9 +953,19 @@ class WebGaugingApp(ctk.CTk):
 
     def show_channel_matrix(self):
         channels = self.get_channel_definitions()
-        materials = self.get_displayed_material_names()
+        materials = self.get_unique_stack_materials()
 
-        if not channels or not materials: return
+        if not channels or not materials:
+            popup = ctk.CTkToplevel(self)
+            popup.title("Channel Matrix")
+            popup.geometry("560x180")
+            popup.attributes("-topmost", True)
+            ctk.CTkLabel(
+                popup,
+                text="Add at least one channel and one non-air truth-stack material before viewing the matrix.",
+                font=("Arial", 14, "bold"),
+            ).pack(expand=True, padx=20, pady=20)
+            return
 
         matrix, channel_weights = self.build_effective_channel_matrix(channels, materials)
         singular_values = np.linalg.svd(matrix, compute_uv=False)
@@ -973,11 +978,15 @@ class WebGaugingApp(ctk.CTk):
         popup.geometry("1100x850")
         popup.attributes("-topmost", True)
 
-        header = ctk.CTkLabel(popup, text="Effective alpha matrix: rows are sensor/filter channels, columns are materials", font=("Arial", 16, "bold"))
+        header = ctk.CTkLabel(popup, text="Effective alpha matrix for truth-stack materials", font=("Arial", 16, "bold"))
         header.pack(pady=(10, 4))
 
-        summary_text = f"Channels: {len(channels)}    Materials: {len(materials)}    Rank: {rank}    Condition: {condition:.3g}"
+        summary_text = f"Channels: {len(channels)}    Truth-stack materials: {len(materials)}    Rank: {rank}    Condition: {condition:.3g}"
         ctk.CTkLabel(popup, text=summary_text).pack(pady=(0, 8))
+        ctk.CTkLabel(
+            popup,
+            text="Curve-display checkboxes only affect spectra plots; this matrix only includes materials currently used in the web stack.",
+        ).pack(pady=(0, 8))
 
         # --- Filter Selection UI ---
         combo_container = ctk.CTkFrame(popup, fg_color="#333333")
