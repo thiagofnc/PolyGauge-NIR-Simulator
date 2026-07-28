@@ -206,10 +206,63 @@ def load_log_spectrum(path):
 
     x = np.asarray(x_values, dtype=float)
     y = np.asarray(y_values, dtype=float)
+
+    # Everything downstream works in wavenumber; a file exported in nm is
+    # converted here so it lines up with the rest.
+    if x.size and "NM" in header.get("XUNITS", "").upper():
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x = 1.0e7 / x
+
     if x.size:
         order = np.argsort(x)
         x, y = x[order], y[order]
     return x, y, header
+
+
+def infer_mode(path, header=None, default=None):
+    """Decides whether a log holds absorbance or transmittance.
+
+    Prefers an ``abs``/``trans`` token in the filename, falls back to the
+    ``##YUNITS`` header, then to ``default``.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    for part in re.split(r"[_\-\s.]+", stem):
+        low = part.lower()
+        if low in ABS_TOKENS:
+            return "absorbance"
+        if low in TRANS_TOKENS:
+            return "transmittance"
+
+    units = (header or {}).get("YUNITS", "").strip().lower()
+    if units:
+        if units.startswith("a"):           # 'Abs', 'A'
+            return "absorbance"
+        if "t" in units:                    # '%T', 'Transmittance'
+            return "transmittance"
+    return default
+
+
+def strip_mode_tokens(path):
+    """Filename stem with any abs/trans token removed, case preserved.
+
+    ``mystery_film_abs.txt`` -> ``mystery_film``, so a loaded abs/trans pair
+    reads as one sample rather than being labelled after whichever half
+    happened to load first.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    parts = [p for p in re.split(r"([_\-\s.]+)", stem)
+             if p.lower() not in ABS_TOKENS + TRANS_TOKENS]
+    return "".join(parts).strip("_-. ") or stem
+
+
+def external_group_key(path):
+    """Key that pairs an ``_abs`` file with its ``_trans`` counterpart.
+
+    Two files in the same folder whose names differ only by the mode token
+    share a key, so a loaded pair collapses into one plottable entry.
+    """
+    return (os.path.normcase(os.path.dirname(os.path.abspath(path))),
+            strip_mode_tokens(path).lower())
 
 
 def wavenumber_to_nm(wavenumber_cm1):

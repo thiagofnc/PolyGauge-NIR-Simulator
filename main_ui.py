@@ -13,7 +13,10 @@ from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
 from Simulation import run_simulation
 from ComponentDatabase import load_component_database
 from ChannelOptimizer import material_names_from_stack, rank_orthogonal_combinations
-from MeasuredData import discover_measured_samples, load_log_spectrum, wavenumber_to_nm
+from tkinter import filedialog
+from MeasuredData import (LOG_DIR, discover_measured_samples, external_group_key,
+                          infer_mode, load_log_spectrum, strip_mode_tokens,
+                          wavenumber_to_nm)
 
 # Categorical series palette, stepped for the dark chart surface (#2b2b2b) and
 # assigned to samples in this fixed order. Past eight samples the hues repeat
@@ -1209,12 +1212,17 @@ class WebGaugingApp(ctk.CTk):
         ctk.CTkButton(bulk_frame, text="Reset Zoom", width=90, fg_color="#555555", hover_color="#666666",
                       command=reset_zoom).pack(side="left", expand=True, padx=2)
 
+        ctk.CTkButton(side_panel, text="Load Text File(s)...", height=28,
+                      fg_color="#a15c00", hover_color="#c47200",
+                      command=lambda: load_external_files()).pack(fill="x", padx=10, pady=(6, 0))
+
         list_frame = ctk.CTkScrollableFrame(side_panel)
         list_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        for sample in samples:
+        def add_sample_row(sample):
             row = ctk.CTkFrame(list_frame, fg_color="transparent")
             row.pack(fill="x", pady=2)
+            sample["row"] = row
             ctk.CTkLabel(row, text="■", text_color=sample["color"],
                          font=("Arial", 16), width=18).pack(side="left")
             # The Info button claims its space before the label so a long
@@ -1237,12 +1245,76 @@ class WebGaugingApp(ctk.CTk):
                 checkbox_height=18,
             ).pack(side="left", padx=(2, 4), fill="x", expand=True)
 
+        for sample in samples:
+            add_sample_row(sample)
+
+        def load_external_files():
+            """Loads arbitrary logs in the same format and adds them to the list."""
+            popup.attributes("-topmost", False)  # Otherwise the dialog opens behind.
+            try:
+                paths = filedialog.askopenfilenames(
+                    parent=popup,
+                    title="Load spectrum log(s)",
+                    initialdir=os.path.abspath(LOG_DIR) if os.path.isdir(LOG_DIR) else os.getcwd(),
+                    filetypes=[("Spectrum logs", "*.txt"), ("All files", "*.*")],
+                )
+            finally:
+                popup.attributes("-topmost", True)
+            if not paths:
+                return
+
+            fallback = "absorbance" if y_mode_var.get() == "Absorbance" else "transmittance"
+            added = 0
+            problems = []
+            for path in paths:
+                wavenumber, _values, header = self.get_measured_spectrum(path)
+                if wavenumber.size == 0:
+                    problems.append(f"{os.path.basename(path)}: no data rows")
+                    continue
+
+                mode = infer_mode(path, header, default=fallback)
+                key = external_group_key(path)
+
+                existing = next((s for s in samples if s.get("external_key") == key), None)
+                if existing is not None:
+                    # Second half of an abs/trans pair, or a reload.
+                    existing["paths"][mode] = path
+                    added += 1
+                    continue
+
+                index = len(samples)
+                sample = {
+                    "number": None,
+                    "variant": "",
+                    "paths": {"absorbance": None, "transmittance": None},
+                    "reference": {},
+                    "external_key": key,
+                    "source_path": path,
+                    "key": strip_mode_tokens(path),
+                    "label": strip_mode_tokens(path),
+                    "color": MEASURED_PALETTE[index % len(MEASURED_PALETTE)],
+                    "linestyle": MEASURED_LINESTYLES[(index // len(MEASURED_PALETTE)) % len(MEASURED_LINESTYLES)],
+                    "visible_var": ctk.BooleanVar(value=True),
+                }
+                sample["paths"][mode] = path
+                samples.append(sample)
+                add_sample_row(sample)
+                added += 1
+
+            if added:
+                redraw()
+            if problems:
+                set_status("; ".join(problems), error=True)
+            elif added:
+                set_status(f"Loaded {added} file(s)")
+
         ctk.CTkLabel(
             side_panel,
             text=("Click a trace to read off a value.\n"
                   "Scroll to zoom (Ctrl = X only, Shift = Y only).\n"
                   "Double-click or Reset Zoom to go back.\n"
                   "X range clips the data; leave a box blank for open-ended.\n"
+                  "Loaded files pair up by name (_abs with _trans).\n"
                   "Repeated colours differ by line style."),
             font=("Arial", 10), text_color="#aaaaaa", justify="left",
         ).pack(padx=10, pady=(0, 10), anchor="w")
@@ -1291,6 +1363,8 @@ class WebGaugingApp(ctk.CTk):
                                                 sticky="w", pady=(14, 4))
         row_index += 1
 
+        if sample.get("source_path"):
+            add_row("Loaded from", os.path.dirname(os.path.abspath(sample["source_path"])))
         if sample["variant"]:
             add_row("Measurement variant", sample["variant"].replace("_", " "))
         add_row("Line style", MEASURED_LINESTYLE_GLYPHS.get(sample["linestyle"], sample["linestyle"]))
