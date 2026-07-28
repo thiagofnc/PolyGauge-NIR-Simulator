@@ -1,44 +1,233 @@
 {
   "sources": [
-    {"name": "Blackbody Halogen 3000K", "type": "blackbody", "temp_k": 3000},
-    {"name": "Blackbody Halogen 2800K", "type": "blackbody", "temp_k": 2800},
-    {"name": "MTE6114W-WRC LED 1460nm", "type": "gaussian", "center_nm": 1460, "fwhm_nm": 103, "peak": 1.0},
-    {"name": "HPIR104 Thermal Emitter", "type": "blackbody", "temp_k": 903.15, "min_nm": 2000, "max_nm": 11000},
-    {"name": "Flat Ideal Source", "type": "flat", "level": 1.0}
+    {
+      "name": "MTE6114W-WRC LED 1460nm",
+      "type": "gaussian",
+      "center_nm": 1460,
+      "fwhm_nm": 103,
+      "peak": 1.0,
+      "manufacturer": "Marktech Optoelectronics",
+      "price_usd": 22.68,
+      "price_status": "LCSC 1-piece reference price; listed out of stock when checked",
+      "url": "https://www.lcsc.com/product-detail/C5784998.html"
+    },
+    {
+      "name": "HPIR104 Thermal Emitter",
+      "type": "blackbody",
+      "temp_k": 903.15,
+      "min_nm": 2000,
+      "max_nm": 11000,
+      "manufacturer": "Thorlabs",
+      "price_usd": 337.69,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=13551&pn=HPIR104"
+    }
   ],
   "filters": [
-    {"name": "Thorlabs FL1064-10", "center_nm": 1064, "fwhm_nm": 10, "peak": 1.0},
-    {"name": "Thorlabs FB1200-10", "center_nm": 1200, "fwhm_nm": 10, "peak": 1.0},
-    {"name": "Thorlabs FB1400-12", "center_nm": 1400, "fwhm_nm": 12, "peak": 1.0},
-    {"name": "Thorlabs FBH1450-12", "center_nm": 1450, "fwhm_nm": 12, "peak": 1.0},
-    {"name": "Syron BP1535-6", "center_nm": 1535, "fwhm_nm": 6, "peak": 1.0},
-    {"name": "Thorlabs FB1625-12", "center_nm": 1625, "fwhm_nm": 12, "peak": 1.0},
-    {"name": "PE 1730 nm", "center_nm": 1730, "fwhm_nm": 18, "peak": 1.0},
-    {"name": "PE 1750 nm", "center_nm": 1750, "fwhm_nm": 12, "peak": 1.0},
-    {"name": "Water 1940 nm", "center_nm": 1940, "fwhm_nm": 30, "peak": 1.0},
-    {"name": "EVOH 2012 nm", "center_nm": 2012, "fwhm_nm": 18, "peak": 1.0},
-    {"name": "Thorlabs FB2100-12", "center_nm": 2100, "fwhm_nm": 12, "peak": 1.0},
-    {"name": "Reference 2200 nm", "center_nm": 2200, "fwhm_nm": 20, "peak": 1.0},
-    {"name": "PE 2310 nm", "center_nm": 2310, "fwhm_nm": 20, "peak": 1.0},
-    {"name": "Andover 3000.0 / 100.0 - 69350-B", "center_nm": 3000, "fwhm_nm": 100, "peak": 1.0},
-    {"name": "PIRF-INBP3400 Type 1", "center_nm": 3400, "fwhm_nm": 140, "peak": 1.0}
+    {
+      "name": "Thorlabs FBH1000-10",
+      "center_nm": 1000,
+      "fwhm_nm": 10,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 193.82,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1000-10",
+      "notes": "Low-NIR reference candidate."
+    },
+    {
+      "name": "Thorlabs FL1064-10",
+      "center_nm": 1064,
+      "fwhm_nm": 10,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 162.75,
+      "price_status": "obsolete catalog price; verify availability before buying",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FL1064-10",
+      "notes": "Laser-line/reference style channel."
+    },
+    {
+      "name": "Thorlabs FBH1150-10",
+      "center_nm": 1150,
+      "fwhm_nm": 10,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1150-10",
+      "notes": "Reference/shoulder channel."
+    },
+    {
+      "name": "Thorlabs FBH1200-10",
+      "center_nm": 1200,
+      "fwhm_nm": 10,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1200-10",
+      "notes": "PE secondary band neighborhood."
+    },
+    {
+      "name": "Thorlabs FBH1300-12",
+      "center_nm": 1300,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1300-12",
+      "notes": "NIR reference channel."
+    },
+    {
+      "name": "Thorlabs FBH1350-12",
+      "center_nm": 1350,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1350-12",
+      "notes": "Reference/OH shoulder region."
+    },
+    {
+      "name": "Thorlabs FBH1400-12",
+      "center_nm": 1400,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1400-12",
+      "notes": "EVOH/OH-sensitive region."
+    },
+    {
+      "name": "Thorlabs FBH1450-12",
+      "center_nm": 1450,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price inferred from current product family table; verify before buying",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1450-12",
+      "notes": "Water primary NIR band."
+    },
+    {
+      "name": "Thorlabs FBH1500-12",
+      "center_nm": 1500,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price inferred from current product family table; verify before buying",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1500-12",
+      "notes": "Nylon/OH shoulder region."
+    },
+    {
+      "name": "Syron BP1535-6",
+      "center_nm": 1535,
+      "fwhm_nm": 6,
+      "peak": 1.0,
+      "manufacturer": "SyronOptics",
+      "price_usd": 125.0,
+      "price_status": "catalog price",
+      "url": "https://syronoptics.com/products/bp1535-6",
+      "notes": "Nylon 6 primary modeled channel."
+    },
+    {
+      "name": "Thorlabs FBH1550-12",
+      "center_nm": 1550,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price inferred from current product family table; verify before buying",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1550-12",
+      "notes": "Telecom/NIR nylon shoulder candidate."
+    },
+    {
+      "name": "Thorlabs FBH1600-12",
+      "center_nm": 1600,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1600-12",
+      "notes": "NIR reference/nylon shoulder candidate."
+    },
+    {
+      "name": "Thorlabs FBH1650-12",
+      "center_nm": 1650,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price inferred from current product family table; verify before buying",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH1650-12",
+      "notes": "NIR reference channel."
+    },
+    {
+      "name": "Thorlabs FBH2000-12",
+      "center_nm": 2000,
+      "fwhm_nm": 12,
+      "peak": 1.0,
+      "manufacturer": "Thorlabs",
+      "price_usd": 202.63,
+      "price_status": "catalog price inferred from current product family table; verify before buying",
+      "url": "https://www.thorlabs.com/thorproduct.cfm?partnumber=FBH2000-12",
+      "notes": "Water/EVOH shoulder region."
+    },
+    {
+      "name": "Andover 3000.0 / 100.0 - 69350-B",
+      "center_nm": 3000,
+      "fwhm_nm": 100,
+      "peak": 1.0,
+      "manufacturer": "Andover Corporation",
+      "price_usd": 335.0,
+      "price_status": "store price",
+      "url": "https://store.andovercorp.com/special-specifications/parts-cannot-be-cut-to-smaller-sizes/",
+      "notes": "MIR O-H/N-H stretch region."
+    },
+    {
+      "name": "PIRF-INBP3400 Type 1",
+      "center_nm": 3400,
+      "fwhm_nm": 140,
+      "peak": 1.0,
+      "manufacturer": "PM Optics",
+      "price_usd": 230.0,
+      "price_status": "catalog price for PIRF-INBP3400-03101 25.4 mm option",
+      "url": "https://www.pmoptics.com/ir_narrow_band_pass_filters_3400.html",
+      "notes": "MIR hydrocarbon stretch region."
+    }
   ],
   "sensors": [
     {
-      "name": "InGaAs",
+      "name": "Thorlabs PDA10D2 InGaAs",
       "type": "piecewise",
-      "points": [[1500, 0.6], [2000, 0.9], [2300, 1.0], [2500, 0.8], [2600, 0.0]]
+      "points": [[900, 0.0], [1500, 0.6], [2000, 0.9], [2300, 1.0], [2500, 0.8], [2600, 0.0]],
+      "manufacturer": "Thorlabs",
+      "price_usd": 667.33,
+      "price_status": "catalog/reseller listed price",
+      "url": "https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=4&pn=PDA10D2"
     },
     {
-      "name": "InAsSb (2.7-5.3um)",
+      "name": "Thorlabs PDA07P2 InAsSb",
       "type": "piecewise",
-      "points": [[2600, 0.0], [2700, 0.75], [3300, 1.0], [5000, 0.95], [5300, 0.5], [5400, 0.0]]
+      "points": [[2600, 0.0], [2700, 0.75], [3300, 1.0], [5000, 0.95], [5300, 0.5], [5400, 0.0]],
+      "manufacturer": "Thorlabs",
+      "price_usd": 619.97,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=12246"
     },
     {
-      "name": "MCT (MIR)",
+      "name": "Thorlabs PDAVJ8 MCT",
       "type": "piecewise",
-      "points": [[2500, 0.0], [2800, 0.8], [3200, 1.0], [3800, 0.9], [4100, 0.0]]
-    },
-    {"name": "Ideal (Flat)", "type": "flat", "level": 1.0}
+      "points": [[2000, 0.0], [2500, 0.8], [3200, 1.0], [3800, 0.9], [8000, 0.7]],
+      "manufacturer": "Thorlabs",
+      "price_usd": 3726.0,
+      "price_status": "catalog price",
+      "url": "https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_ID=11689"
+    }
   ]
 }

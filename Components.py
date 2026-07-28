@@ -31,7 +31,6 @@ class Sensor(SpectralProfile):
     """Represents the photodetector. Data is spectral responsivity (e.g., Amps/Watt)."""
     pass
 
-
 class MaterialLayer:
     """
     Represents a physical layer in the plastic web. 
