@@ -13,6 +13,15 @@ from Components import LightSource, OpticalFilter, Sensor, MaterialLayer
 from Simulation import run_simulation
 from ComponentDatabase import load_component_database
 from ChannelOptimizer import material_names_from_stack, rank_orthogonal_combinations
+from MeasuredData import discover_measured_samples, load_log_spectrum, wavenumber_to_nm
+
+# Categorical series palette, stepped for the dark chart surface (#2b2b2b) and
+# assigned to samples in this fixed order. Past eight samples the hues repeat
+# with a different line style, so every series stays a unique colour+dash pair.
+MEASURED_PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500",
+                    "#d55181", "#22c55e", "#9085e9", "#e66767"]
+MEASURED_LINESTYLES = ["-", "--", ":"]
+MEASURED_LINESTYLE_GLYPHS = {"-": "solid", "--": "dashed", ":": "dotted"}
 
 def load_csv_spectrum(filepath, master_wl, x_type='nm', y_type='transmission', nominal_thickness_mm=0.05):
     """
@@ -402,6 +411,8 @@ class WebGaugingApp(ctk.CTk):
                       fg_color="#0a7c66", hover_color="#0d9479", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkButton(self.data_panel, text="RANK FILTER COMBOS", command=self.show_ranked_combinations,
                       fg_color="#6b3fa0", hover_color="#7d51bd", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkButton(self.data_panel, text="MEASURED SAMPLES", command=self.show_measured_samples,
+                      fg_color="#a15c00", hover_color="#c47200", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
 
     # --- UI Builders ---
     def add_sensors_from_db(self):
@@ -811,6 +822,456 @@ class WebGaugingApp(ctk.CTk):
 
         canvas.mpl_connect("button_press_event", on_click)
         canvas.draw()
+
+    # --- Measured spectrometer data ---
+    def get_measured_spectrum(self, path):
+        """Loads a log file once and caches it for the session."""
+        if not hasattr(self, "_measured_spectrum_cache"):
+            self._measured_spectrum_cache = {}
+        if path not in self._measured_spectrum_cache:
+            self._measured_spectrum_cache[path] = load_log_spectrum(path)
+        return self._measured_spectrum_cache[path]
+
+    def show_measured_samples(self):
+        """Plots the measured FTIR logs with a per-sample show/hide panel."""
+        samples, reference_headers = discover_measured_samples()
+
+        popup = ctk.CTkToplevel(self)
+        popup.title("Measured Sample Spectra")
+        popup.geometry("1350x820")
+        popup.attributes("-topmost", True)
+
+        if not samples:
+            ctk.CTkLabel(
+                popup,
+                text="No measured logs found in log_files/.",
+                font=("Arial", 14, "bold"),
+            ).pack(expand=True, padx=20, pady=20)
+            return
+
+        for index, sample in enumerate(samples):
+            sample["color"] = MEASURED_PALETTE[index % len(MEASURED_PALETTE)]
+            sample["linestyle"] = MEASURED_LINESTYLES[(index // len(MEASURED_PALETTE)) % len(MEASURED_LINESTYLES)]
+            # Start with a readable handful rather than 18 overlapping traces.
+            sample["visible_var"] = ctk.BooleanVar(value=index < 3)
+
+        y_mode_var = ctk.StringVar(value="Absorbance")
+        x_mode_var = ctk.StringVar(value="Wavenumber (1/cm)")
+        x_min_var = ctk.StringVar(value="")
+        x_max_var = ctk.StringVar(value="")
+        range_status_var = ctk.StringVar(value="")
+
+        popup.grid_columnconfigure(0, weight=1)
+        popup.grid_columnconfigure(1, weight=0)
+        popup.grid_rowconfigure(0, weight=1)
+
+        plot_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        plot_frame.grid(row=0, column=0, sticky="nsew", padx=(10, 5), pady=10)
+
+        fig, ax = plt.subplots(figsize=(9, 6.5), facecolor='#2b2b2b')
+        ax.set_facecolor('#2b2b2b')
+        ax.tick_params(colors='white')
+        ax.grid(True, alpha=0.2)
+        for spine in ax.spines.values():
+            spine.set_color('gray')
+
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        annotation = ax.annotate(
+            "", xy=(0, 0), xytext=(12, 12), textcoords="offset points", color="white",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
+            arrowprops=dict(arrowstyle="->", color="white"),
+        )
+        annotation.set_visible(False)
+        marker, = ax.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
+
+        plotted = []
+        home_limits = {}
+
+        status_widget = {}
+
+        def set_status(text, error=False):
+            range_status_var.set(text)
+            label = status_widget.get("label")
+            if label is not None:
+                label.configure(text_color="#e66767" if error else "#aaaaaa")
+
+        def get_range_bounds():
+            """Parses the X-range entries into (low, high) in the current unit.
+
+            Either side may be blank for 'unbounded'; returns None on bad input
+            after reporting it in the status line.
+            """
+            bounds = []
+            for var, name in ((x_min_var, "From"), (x_max_var, "To")):
+                text = var.get().strip()
+                if not text:
+                    bounds.append(None)
+                    continue
+                try:
+                    bounds.append(float(text.replace(",", ".")))
+                except ValueError:
+                    set_status(f"{name}: '{text}' is not a number", error=True)
+                    return None
+            low, high = bounds
+            if low is not None and high is not None and low > high:
+                low, high = high, low  # Accept the bounds in either order.
+            return low, high
+
+        def redraw():
+            mode_key = "absorbance" if y_mode_var.get() == "Absorbance" else "transmittance"
+            use_wavenumber = x_mode_var.get().startswith("Wavenumber")
+
+            bounds = get_range_bounds()
+            if bounds is None:
+                return
+            range_low, range_high = bounds
+
+            ax.clear()
+            ax.set_facecolor('#2b2b2b')
+            ax.tick_params(colors='white')
+            ax.grid(True, alpha=0.2)
+            for spine in ax.spines.values():
+                spine.set_color('gray')
+
+            plotted.clear()
+            missing = []
+            selected_count = 0
+            for sample in samples:
+                if not sample["visible_var"].get():
+                    continue
+                selected_count += 1
+                path = sample["paths"].get(mode_key)
+                if not path:
+                    missing.append(sample["label"])
+                    continue
+                wavenumber, values, _ = self.get_measured_spectrum(path)
+                if wavenumber.size == 0:
+                    continue
+                x_values = wavenumber if use_wavenumber else wavenumber_to_nm(wavenumber)
+
+                # Keep only the points inside the requested X range so the Y
+                # axis scales to what is actually on screen.
+                if range_low is not None or range_high is not None:
+                    keep = np.ones_like(x_values, dtype=bool)
+                    if range_low is not None:
+                        keep &= x_values >= range_low
+                    if range_high is not None:
+                        keep &= x_values <= range_high
+                    x_values, values = x_values[keep], values[keep]
+                    if x_values.size == 0:
+                        continue
+
+                ax.plot(x_values, values, label=sample["label"], color=sample["color"],
+                        linestyle=sample["linestyle"], linewidth=1.6)
+                plotted.append({"name": sample["label"], "x": x_values, "y": values})
+
+            unit = "cm^-1" if use_wavenumber else "nm"
+            if range_low is None and range_high is None:
+                set_status(f"Full range ({unit})")
+            else:
+                low_text = f"{range_low:g}" if range_low is not None else "min"
+                high_text = f"{range_high:g}" if range_high is not None else "max"
+                points = plotted[0]["x"].size if plotted else 0
+                set_status(f"{low_text} - {high_text} {unit}  ({points} pts/trace)",
+                           error=bool(selected_count and not plotted and not missing))
+
+            if use_wavenumber:
+                ax.set_xlabel("Wavenumber (cm^-1)", color='white')
+                ax.invert_xaxis()  # Conventional FTIR orientation.
+            else:
+                ax.set_xlabel("Wavelength (nm)", color='white')
+
+            if mode_key == "absorbance":
+                ax.set_ylabel("Absorbance (a.u.)", color='white')
+                ax.set_title("Measured Absorbance", color='white')
+            else:
+                ax.set_ylabel("Transmittance (%)", color='white')
+                ax.set_title("Measured Transmittance", color='white')
+
+            if plotted:
+                # Beyond ~10 traces the in-plot legend eats the chart; the
+                # colour-coded sample list on the right serves as the legend.
+                if len(plotted) <= 10:
+                    ax.legend(facecolor='#333333', edgecolor='white', labelcolor='white',
+                              loc='upper right', fontsize=8)
+                else:
+                    ax.set_title(ax.get_title() + f"  -  {len(plotted)} samples (see list at right)",
+                                 color='white')
+            else:
+                message = "Select samples in the panel on the right"
+                if missing:
+                    message = "No " + y_mode_var.get().lower() + " log for the selected sample(s)"
+                elif selected_count:
+                    message = "No data points inside the selected X range"
+                ax.text(0.5, 0.5, message, transform=ax.transAxes,
+                        ha="center", va="center", color="white")
+
+            nonlocal annotation, marker
+            marker, = ax.plot([], [], marker="o", color="white", markersize=6, linestyle="None")
+            annotation = ax.annotate(
+                "", xy=(0, 0), xytext=(12, 12), textcoords="offset points", color="white",
+                bbox=dict(boxstyle="round,pad=0.3", fc="#333333", ec="white", alpha=0.95),
+                arrowprops=dict(arrowstyle="->", color="white"),
+            )
+            annotation.set_visible(False)
+
+            fig.tight_layout()
+            # Remember the full view so scroll-zoom can be reset to it.
+            home_limits["x"] = ax.get_xlim()
+            home_limits["y"] = ax.get_ylim()
+            canvas.draw_idle()
+
+        def reset_zoom():
+            if home_limits.get("x"):
+                ax.set_xlim(home_limits["x"])
+                ax.set_ylim(home_limits["y"])
+                canvas.draw_idle()
+
+        def on_scroll(event):
+            """Mouse wheel zooms about the cursor.
+
+            Plain scroll zooms both axes; Ctrl locks the zoom to X, Shift locks
+            it to Y. The arithmetic is relative to the current limits, so it
+            behaves the same on the inverted wavenumber axis.
+            """
+            if event.inaxes != ax:
+                return
+            step = getattr(event, "step", 0) or (1 if event.button == "up" else -1)
+            scale = 1.25 ** (-step)  # Scroll up shrinks the visible range.
+
+            key = (event.key or "").lower()
+            zoom_x = "shift" not in key
+            zoom_y = "control" not in key and "ctrl" not in key
+
+            if zoom_x and event.xdata is not None:
+                left, right = ax.get_xlim()
+                ax.set_xlim(event.xdata + (left - event.xdata) * scale,
+                            event.xdata + (right - event.xdata) * scale)
+            if zoom_y and event.ydata is not None:
+                bottom, top = ax.get_ylim()
+                ax.set_ylim(event.ydata + (bottom - event.ydata) * scale,
+                            event.ydata + (top - event.ydata) * scale)
+            canvas.draw_idle()
+
+        canvas.mpl_connect("scroll_event", on_scroll)
+        # Modifier keys only reach matplotlib when the canvas has focus.
+        plot_widget = canvas.get_tk_widget()
+        plot_widget.bind("<Enter>", lambda _event: plot_widget.focus_set())
+
+        def on_click(event):
+            if event.inaxes != ax:
+                return
+            if event.dblclick:
+                reset_zoom()
+                return
+            if event.xdata is None or not plotted:
+                return
+            click_xy = np.array([event.x, event.y])
+            nearest = None
+            nearest_distance = float("inf")
+            for item in plotted:
+                idx = int(np.argmin(np.abs(item["x"] - event.xdata)))
+                pixel_xy = ax.transData.transform((item["x"][idx], item["y"][idx]))
+                distance = np.linalg.norm(pixel_xy - click_xy)
+                if distance < nearest_distance:
+                    nearest = (item, idx)
+                    nearest_distance = distance
+
+            item, idx = nearest
+            x_val, y_val = item["x"][idx], item["y"][idx]
+            unit = "cm^-1" if x_mode_var.get().startswith("Wavenumber") else "nm"
+            value_label = "Abs" if y_mode_var.get() == "Absorbance" else "%T"
+            marker.set_data([x_val], [y_val])
+            annotation.xy = (x_val, y_val)
+            annotation.set_text(f"{item['name']}\n{x_val:.1f} {unit}\n{value_label}: {y_val:.4g}")
+            annotation.set_visible(True)
+            canvas.draw_idle()
+
+        canvas.mpl_connect("button_press_event", on_click)
+
+        # --- Right-hand sample panel ---
+        side_panel = ctk.CTkFrame(popup, width=380)
+        side_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=10)
+        side_panel.grid_propagate(False)
+
+        ctk.CTkLabel(side_panel, text="Samples", font=("Arial", 18, "bold")).pack(pady=(10, 5))
+
+        ctk.CTkLabel(side_panel, text="Quantity", font=("Arial", 12, "bold")).pack(pady=(5, 0))
+        ctk.CTkSegmentedButton(side_panel, variable=y_mode_var,
+                               values=["Absorbance", "Transmittance"],
+                               command=lambda _value: redraw()).pack(fill="x", padx=10, pady=5)
+
+        ctk.CTkLabel(side_panel, text="X axis", font=("Arial", 12, "bold")).pack(pady=(5, 0))
+
+        x_mode_state = {"current": x_mode_var.get()}
+
+        def on_x_mode_change(value):
+            """Carries an existing range across the unit switch."""
+            if value != x_mode_state["current"] and (x_min_var.get().strip() or x_max_var.get().strip()):
+                bounds = get_range_bounds()
+                if bounds is not None:
+                    low, high = bounds
+                    # nm = 1e7 / cm^-1 in both directions, and the conversion
+                    # reverses the ordering, so the two ends swap.
+                    new_low = f"{1.0e7 / high:.6g}" if high else ""
+                    new_high = f"{1.0e7 / low:.6g}" if low else ""
+                    x_min_var.set(new_low)
+                    x_max_var.set(new_high)
+            x_mode_state["current"] = value
+            redraw()
+
+        ctk.CTkSegmentedButton(side_panel, variable=x_mode_var,
+                               values=["Wavenumber (1/cm)", "Wavelength (nm)"],
+                               command=on_x_mode_change).pack(fill="x", padx=10, pady=5)
+
+        ctk.CTkLabel(side_panel, text="X range", font=("Arial", 12, "bold")).pack(pady=(8, 0))
+        range_frame = ctk.CTkFrame(side_panel, fg_color="transparent")
+        range_frame.pack(fill="x", padx=10, pady=(2, 0))
+        ctk.CTkLabel(range_frame, text="From", font=("Arial", 11), width=36).pack(side="left")
+        min_entry = ctk.CTkEntry(range_frame, textvariable=x_min_var, width=70, placeholder_text="min")
+        min_entry.pack(side="left", padx=2)
+        ctk.CTkLabel(range_frame, text="To", font=("Arial", 11), width=24).pack(side="left")
+        max_entry = ctk.CTkEntry(range_frame, textvariable=x_max_var, width=70, placeholder_text="max")
+        max_entry.pack(side="left", padx=2)
+
+        def clear_range():
+            x_min_var.set("")
+            x_max_var.set("")
+            redraw()
+
+        range_button_frame = ctk.CTkFrame(side_panel, fg_color="transparent")
+        range_button_frame.pack(fill="x", padx=10, pady=(4, 0))
+        ctk.CTkButton(range_button_frame, text="Apply Range", height=26,
+                      command=redraw).pack(side="left", expand=True, fill="x", padx=2)
+        ctk.CTkButton(range_button_frame, text="Full Range", height=26,
+                      fg_color="#555555", hover_color="#666666",
+                      command=clear_range).pack(side="left", expand=True, fill="x", padx=2)
+
+        for entry in (min_entry, max_entry):
+            entry.bind("<Return>", lambda _event: redraw())
+
+        status_widget["label"] = ctk.CTkLabel(side_panel, textvariable=range_status_var,
+                                              font=("Arial", 10), text_color="#aaaaaa")
+        status_widget["label"].pack(padx=10, pady=(2, 0))
+
+        def set_all(visible):
+            for sample in samples:
+                sample["visible_var"].set(visible)
+            redraw()
+
+        bulk_frame = ctk.CTkFrame(side_panel, fg_color="transparent")
+        bulk_frame.pack(fill="x", padx=10, pady=(5, 0))
+        ctk.CTkButton(bulk_frame, text="Show All", width=80,
+                      command=lambda: set_all(True)).pack(side="left", expand=True, padx=2)
+        ctk.CTkButton(bulk_frame, text="Hide All", width=80, fg_color="#555555", hover_color="#666666",
+                      command=lambda: set_all(False)).pack(side="left", expand=True, padx=2)
+        ctk.CTkButton(bulk_frame, text="Reset Zoom", width=90, fg_color="#555555", hover_color="#666666",
+                      command=reset_zoom).pack(side="left", expand=True, padx=2)
+
+        list_frame = ctk.CTkScrollableFrame(side_panel)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        for sample in samples:
+            row = ctk.CTkFrame(list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            ctk.CTkLabel(row, text="■", text_color=sample["color"],
+                         font=("Arial", 16), width=18).pack(side="left")
+            # The Info button claims its space before the label so a long
+            # composition string can never push it out of the row.
+            ctk.CTkButton(
+                row, text="Info", width=48, height=24, font=("Arial", 11),
+                fg_color="#3a3a3a", hover_color="#4a4a4a",
+                command=lambda s=sample, h=reference_headers: self.show_measured_sample_details(s, h),
+            ).pack(side="right", padx=(4, 0))
+            short_label = sample["label"]
+            if len(short_label) > 34:
+                short_label = short_label[:33] + "…"
+            ctk.CTkCheckBox(
+                row,
+                text=short_label,
+                variable=sample["visible_var"],
+                command=redraw,
+                font=("Arial", 11),
+                checkbox_width=18,
+                checkbox_height=18,
+            ).pack(side="left", padx=(2, 4), fill="x", expand=True)
+
+        ctk.CTkLabel(
+            side_panel,
+            text=("Click a trace to read off a value.\n"
+                  "Scroll to zoom (Ctrl = X only, Shift = Y only).\n"
+                  "Double-click or Reset Zoom to go back.\n"
+                  "X range clips the data; leave a box blank for open-ended.\n"
+                  "Repeated colours differ by line style."),
+            font=("Arial", 10), text_color="#aaaaaa", justify="left",
+        ).pack(padx=10, pady=(0, 10), anchor="w")
+
+        redraw()
+        canvas.draw()
+
+    def show_measured_sample_details(self, sample, reference_headers):
+        """Shows the reference-sheet row and log details for one sample."""
+        popup = ctk.CTkToplevel(self)
+        popup.title(f"Details - {sample['label']}")
+        popup.geometry("640x520")
+        popup.attributes("-topmost", True)
+
+        container = ctk.CTkScrollableFrame(popup)
+        container.pack(fill="both", expand=True, padx=15, pady=15)
+        container.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(container, text=sample["label"], font=("Arial", 16, "bold"),
+                     text_color=sample["color"], wraplength=560, justify="left").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        row_index = 1
+
+        def add_row(key, value):
+            nonlocal row_index
+            ctk.CTkLabel(container, text=key, font=("Arial", 12, "bold"),
+                         anchor="w").grid(row=row_index, column=0, sticky="nw", padx=(0, 10), pady=3)
+            ctk.CTkLabel(container, text=value, font=("Arial", 12), anchor="w",
+                         wraplength=380, justify="left").grid(row=row_index, column=1, sticky="w", pady=3)
+            row_index += 1
+
+        reference = sample.get("reference") or {}
+        if reference:
+            ctk.CTkLabel(container, text="Reference sheet (sample_references.xlsx)",
+                         font=("Arial", 13, "bold"), text_color="#aaaaaa").grid(
+                row=row_index, column=0, columnspan=2, sticky="w", pady=(10, 4))
+            row_index += 1
+            for _column, header in reference_headers:
+                add_row(header, reference.get(header, "-") or "-")
+        else:
+            add_row("Reference sheet", "No matching row found.")
+
+        ctk.CTkLabel(container, text="Measured logs", font=("Arial", 13, "bold"),
+                     text_color="#aaaaaa").grid(row=row_index, column=0, columnspan=2,
+                                                sticky="w", pady=(14, 4))
+        row_index += 1
+
+        if sample["variant"]:
+            add_row("Measurement variant", sample["variant"].replace("_", " "))
+        add_row("Line style", MEASURED_LINESTYLE_GLYPHS.get(sample["linestyle"], sample["linestyle"]))
+
+        for mode_key, mode_label in (("absorbance", "Absorbance log"), ("transmittance", "Transmittance log")):
+            path = sample["paths"].get(mode_key)
+            if not path:
+                add_row(mode_label, "not available")
+                continue
+            wavenumber, values, header = self.get_measured_spectrum(path)
+            add_row(mode_label, os.path.basename(path))
+            if wavenumber.size:
+                add_row(
+                    "   range",
+                    f"{wavenumber.min():.1f} - {wavenumber.max():.1f} cm^-1"
+                    f"  ({wavenumber_to_nm(wavenumber.max()):.0f} - {wavenumber_to_nm(wavenumber.min()):.0f} nm)",
+                )
+                add_row("   points", f"{wavenumber.size}")
+                add_row("   y range", f"{values.min():.4g} to {values.max():.4g} "
+                                      f"({header.get('YUNITS', 'unknown units')})")
 
     def show_thickness_solver(self):
         channels = self.get_channel_definitions()
