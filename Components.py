@@ -21,7 +21,6 @@ class LightSource(SpectralProfile):
     """Represents the IR emitter. Data is spectral irradiance (e.g., W/m^2/nm)."""
     pass
 
-
 class OpticalFilter(SpectralProfile):
     """Represents a narrow-band filter. Data is Transmittance (0.0 to 1.0)."""
     pass
