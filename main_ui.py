@@ -844,7 +844,7 @@ class WebGaugingApp(ctk.CTk):
         if not samples:
             ctk.CTkLabel(
                 popup,
-                text="No measured logs found in log_files/.",
+                text="No measured logs found in logs_full_range/.",
                 font=("Arial", 14, "bold"),
             ).pack(expand=True, padx=20, pady=20)
             return
@@ -1060,12 +1060,9 @@ class WebGaugingApp(ctk.CTk):
         plot_widget = canvas.get_tk_widget()
         plot_widget.bind("<Enter>", lambda _event: plot_widget.focus_set())
 
-        def on_click(event):
-            if event.inaxes != ax:
-                return
-            if event.dblclick:
-                reset_zoom()
-                return
+        pan_state = {"active": False, "moved": False}
+
+        def show_nearest_point(event):
             if event.xdata is None or not plotted:
                 return
             click_xy = np.array([event.x, event.y])
@@ -1089,7 +1086,47 @@ class WebGaugingApp(ctk.CTk):
             annotation.set_visible(True)
             canvas.draw_idle()
 
-        canvas.mpl_connect("button_press_event", on_click)
+        def on_mouse_press(event):
+            if event.inaxes != ax or event.button != 1:
+                return
+            if event.dblclick:
+                reset_zoom()
+                return
+            pan_state.update(
+                active=True,
+                moved=False,
+                press_x=event.x,
+                press_y=event.y,
+                x_limits=ax.get_xlim(),
+                y_limits=ax.get_ylim(),
+            )
+
+        def on_mouse_move(event):
+            if not pan_state["active"] or event.inaxes != ax:
+                return
+            pixel_distance = np.hypot(event.x - pan_state["press_x"],
+                                      event.y - pan_state["press_y"])
+            if pixel_distance > 3:
+                pan_state["moved"] = True
+            left, right = pan_state["x_limits"]
+            bottom, top = pan_state["y_limits"]
+            x_shift = (pan_state["press_x"] - event.x) * (right - left) / ax.bbox.width
+            y_shift = (pan_state["press_y"] - event.y) * (top - bottom) / ax.bbox.height
+            ax.set_xlim(left + x_shift, right + x_shift)
+            ax.set_ylim(bottom + y_shift, top + y_shift)
+            annotation.set_visible(False)
+            canvas.draw_idle()
+
+        def on_mouse_release(event):
+            if event.button != 1 or not pan_state["active"]:
+                return
+            pan_state["active"] = False
+            if not pan_state["moved"] and event.inaxes == ax:
+                show_nearest_point(event)
+
+        canvas.mpl_connect("button_press_event", on_mouse_press)
+        canvas.mpl_connect("motion_notify_event", on_mouse_move)
+        canvas.mpl_connect("button_release_event", on_mouse_release)
 
         # --- Right-hand sample panel ---
         side_panel = ctk.CTkFrame(popup, width=380)
@@ -1155,6 +1192,8 @@ class WebGaugingApp(ctk.CTk):
         status_widget["label"] = ctk.CTkLabel(side_panel, textvariable=range_status_var,
                                               font=("Arial", 10), text_color="#aaaaaa")
         status_widget["label"].pack(padx=10, pady=(2, 0))
+        ctk.CTkLabel(side_panel, text="Drag to pan • Scroll to zoom • Double-click to reset",
+                     font=("Arial", 10), text_color="#aaaaaa").pack(padx=10, pady=(0, 4))
 
         def set_all(visible):
             for sample in samples:

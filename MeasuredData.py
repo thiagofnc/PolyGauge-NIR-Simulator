@@ -1,6 +1,6 @@
 """Loaders for the measured spectrometer logs and the sample reference sheet.
 
-The logs in ``log_files/`` are JCAMP-style text exports from the FTIR: four
+The logs in ``logs_full_range/`` are JCAMP-style text exports from the FTIR: four
 ``##KEY=VALUE`` header lines followed by ``<wavenumber cm^-1>\t<value>`` rows.
 Files ending in ``_abs`` carry absorbance, ``_trans`` carry percent
 transmittance.  ``sample_references.xlsx`` describes what each physical sample
@@ -17,7 +17,7 @@ from xml.etree import ElementTree as ET
 
 import numpy as np
 
-LOG_DIR = "log_files"
+LOG_DIR = "logs_full_range"
 REFERENCE_XLSX = "sample_references.xlsx"
 
 ABS_TOKENS = ("abs", "absorbance")
