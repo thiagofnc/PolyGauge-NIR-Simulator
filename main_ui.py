@@ -863,6 +863,13 @@ class WebGaugingApp(ctk.CTk):
         x_min_var = ctk.StringVar(value="")
         x_max_var = ctk.StringVar(value="")
         range_status_var = ctk.StringVar(value="")
+        bandwidth_var = ctk.StringVar(value="400")
+        filter_status_var = ctk.StringVar(value="Click a point on the graph, then Add Filter")
+
+        # Filter bands are stored as (low, high) wavenumber edges so they stay
+        # put when the X axis switches between cm^-1 and nm.
+        filter_bands = []
+        selection = {"wavenumber": None, "display_x": None}
 
         popup.grid_columnconfigure(0, weight=1)
         popup.grid_columnconfigure(1, weight=0)
@@ -893,10 +900,17 @@ class WebGaugingApp(ctk.CTk):
         home_limits = {}
 
         status_widget = {}
+        filter_status_widget = {}
 
         def set_status(text, error=False):
             range_status_var.set(text)
             label = status_widget.get("label")
+            if label is not None:
+                label.configure(text_color="#e66767" if error else "#aaaaaa")
+
+        def set_filter_status(text, error=False):
+            filter_status_var.set(text)
+            label = filter_status_widget.get("label")
             if label is not None:
                 label.configure(text_color="#e66767" if error else "#aaaaaa")
 
@@ -969,6 +983,20 @@ class WebGaugingApp(ctk.CTk):
                 ax.plot(x_values, values, label=sample["label"], color=sample["color"],
                         linestyle=sample["linestyle"], linewidth=1.6)
                 plotted.append({"name": sample["label"], "x": x_values, "y": values})
+
+            # Filter bands sit under the traces as a recessive highlight, so
+            # they never compete with the sample colours.
+            for band in filter_bands:
+                low_cm, high_cm = band["low_cm"], band["high_cm"]
+                if use_wavenumber:
+                    left, right = low_cm, high_cm
+                    centre = band["centre_cm"]
+                else:
+                    left, right = wavenumber_to_nm(high_cm), wavenumber_to_nm(low_cm)
+                    centre = wavenumber_to_nm(band["centre_cm"])
+                ax.axvspan(left, right, color="#ffffff", alpha=0.10, zorder=0)
+                ax.axvline(centre, color="#dddddd", alpha=0.45, linewidth=1.0,
+                           linestyle="--", zorder=0)
 
             unit = "cm^-1" if use_wavenumber else "nm"
             if range_low is None and range_high is None:
@@ -1087,6 +1115,10 @@ class WebGaugingApp(ctk.CTk):
             annotation.xy = (x_val, y_val)
             annotation.set_text(f"{item['name']}\n{x_val:.1f} {unit}\n{value_label}: {y_val:.4g}")
             annotation.set_visible(True)
+            # Remembered in wavenumber so "Add Filter" works in either unit.
+            selection["wavenumber"] = x_val if unit == "cm^-1" else 1.0e7 / x_val
+            selection["display_x"] = x_val
+            set_filter_status(f"Selected {x_val:.1f} {unit}")
             canvas.draw_idle()
 
         def on_mouse_press(event):
@@ -1197,6 +1229,71 @@ class WebGaugingApp(ctk.CTk):
         status_widget["label"].pack(padx=10, pady=(2, 0))
         ctk.CTkLabel(side_panel, text="Drag to pan • Scroll to zoom • Double-click to reset",
                      font=("Arial", 10), text_color="#aaaaaa").pack(padx=10, pady=(0, 4))
+
+        ctk.CTkLabel(side_panel, text="Filters", font=("Arial", 12, "bold")).pack(pady=(8, 0))
+        filter_frame = ctk.CTkFrame(side_panel, fg_color="transparent")
+        filter_frame.pack(fill="x", padx=10, pady=(2, 0))
+        ctk.CTkLabel(filter_frame, text="Bandwidth", font=("Arial", 11), width=64).pack(side="left")
+        bandwidth_entry = ctk.CTkEntry(filter_frame, textvariable=bandwidth_var, width=70)
+        bandwidth_entry.pack(side="left", padx=2)
+        ctk.CTkButton(filter_frame, text="Add Filter", height=26,
+                      command=lambda: add_filter()).pack(side="left", expand=True, fill="x", padx=2)
+
+        def add_filter():
+            """Highlights ±bandwidth/2 around the point last clicked on the graph."""
+            if selection["wavenumber"] is None:
+                set_filter_status("Click a point on the graph first", error=True)
+                return
+
+            text = bandwidth_var.get().strip().replace(",", ".")
+            try:
+                bandwidth = float(text)
+            except ValueError:
+                set_filter_status(f"Bandwidth: '{text}' is not a number", error=True)
+                return
+            if bandwidth <= 0:
+                set_filter_status("Bandwidth must be greater than zero", error=True)
+                return
+
+            use_wavenumber = x_mode_var.get().startswith("Wavenumber")
+            unit = "cm^-1" if use_wavenumber else "nm"
+            centre_display = selection["display_x"]
+            low_display = centre_display - bandwidth / 2.0
+            high_display = centre_display + bandwidth / 2.0
+
+            if use_wavenumber:
+                low_cm, high_cm = low_display, high_display
+            else:
+                # In nm the band edges invert when converted to wavenumber.
+                if low_display <= 0:
+                    set_filter_status("Bandwidth reaches past 0 nm", error=True)
+                    return
+                low_cm, high_cm = 1.0e7 / high_display, 1.0e7 / low_display
+
+            filter_bands.append({
+                "low_cm": low_cm,
+                "high_cm": high_cm,
+                "centre_cm": selection["wavenumber"],
+                "label": f"{centre_display:.1f} ± {bandwidth / 2:.1f} {unit}",
+            })
+            set_filter_status(f"{len(filter_bands)} filter(s): "
+                              f"{low_display:.1f} - {high_display:.1f} {unit}")
+            redraw()
+
+        def clear_filters():
+            filter_bands.clear()
+            set_filter_status("Click a point on the graph, then Add Filter")
+            redraw()
+
+        ctk.CTkButton(side_panel, text="Clear Filters", height=24, font=("Arial", 11),
+                      fg_color="#555555", hover_color="#666666",
+                      command=clear_filters).pack(fill="x", padx=10, pady=(4, 0))
+        bandwidth_entry.bind("<Return>", lambda _event: add_filter())
+
+        filter_status_widget["label"] = ctk.CTkLabel(side_panel, textvariable=filter_status_var,
+                                                     font=("Arial", 10), text_color="#aaaaaa",
+                                                     wraplength=340)
+        filter_status_widget["label"].pack(padx=10, pady=(2, 0))
 
         def set_all(visible):
             for sample in samples:
@@ -1315,6 +1412,7 @@ class WebGaugingApp(ctk.CTk):
                   "Double-click or Reset Zoom to go back.\n"
                   "X range clips the data; leave a box blank for open-ended.\n"
                   "Loaded files pair up by name (_abs with _trans).\n"
+                  "Add Filter highlights ±bandwidth/2 around the clicked point.\n"
                   "Repeated colours differ by line style."),
             font=("Arial", 10), text_color="#aaaaaa", justify="left",
         ).pack(padx=10, pady=(0, 10), anchor="w")
