@@ -26,6 +26,11 @@ MEASURED_PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500",
 MEASURED_LINESTYLES = ["-", "--", ":"]
 MEASURED_LINESTYLE_GLYPHS = {"-": "solid", "--": "dashed", ":": "dotted"}
 
+# Filter highlights use their own bright palette so adjacent bands remain easy
+# to distinguish from one another on the dark measured-samples chart.
+MEASURED_FILTER_PALETTE = ["#38bdf8", "#f59e0b", "#a78bfa", "#34d399",
+                           "#fb7185", "#facc15", "#2dd4bf", "#f472b6"]
+
 def load_csv_spectrum(filepath, master_wl, x_type='nm', y_type='transmission', nominal_thickness_mm=0.05):
     """
     Loads raw pixel data from CSV, converts units to nm and alpha, 
@@ -984,8 +989,8 @@ class WebGaugingApp(ctk.CTk):
                         linestyle=sample["linestyle"], linewidth=1.6)
                 plotted.append({"name": sample["label"], "x": x_values, "y": values})
 
-            # Filter bands sit under the traces as a recessive highlight, so
-            # they never compete with the sample colours.
+            # Filter bands sit under the traces as recessive, color-coded
+            # highlights, making overlapping/adjacent filters distinguishable.
             for band in filter_bands:
                 low_cm, high_cm = band["low_cm"], band["high_cm"]
                 if use_wavenumber:
@@ -994,8 +999,8 @@ class WebGaugingApp(ctk.CTk):
                 else:
                     left, right = wavenumber_to_nm(high_cm), wavenumber_to_nm(low_cm)
                     centre = wavenumber_to_nm(band["centre_cm"])
-                ax.axvspan(left, right, color="#ffffff", alpha=0.10, zorder=0)
-                ax.axvline(centre, color="#dddddd", alpha=0.45, linewidth=1.0,
+                ax.axvspan(left, right, color=band["color"], alpha=0.18, zorder=0)
+                ax.axvline(centre, color=band["color"], alpha=0.75, linewidth=1.0,
                            linestyle="--", zorder=0)
 
             unit = "cm^-1" if use_wavenumber else "nm"
@@ -1274,6 +1279,9 @@ class WebGaugingApp(ctk.CTk):
                 "low_cm": low_cm,
                 "high_cm": high_cm,
                 "centre_cm": selection["wavenumber"],
+                "color": MEASURED_FILTER_PALETTE[
+                    len(filter_bands) % len(MEASURED_FILTER_PALETTE)
+                ],
                 "label": f"{centre_display:.1f} ± {bandwidth / 2:.1f} {unit}",
             })
             set_filter_status(f"{len(filter_bands)} filter(s): "

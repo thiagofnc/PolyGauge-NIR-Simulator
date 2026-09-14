@@ -2,9 +2,10 @@
 
 The logs in ``logs_full_range/`` are JCAMP-style text exports from the FTIR: four
 ``##KEY=VALUE`` header lines followed by ``<wavenumber cm^-1>\t<value>`` rows.
-Files ending in ``_abs`` carry absorbance, ``_trans`` carry percent
-transmittance.  ``sample_references.xlsx`` describes what each physical sample
-is (layers, thickness, filler, composition).
+Files containing an ``_abs`` token carry absorbance, while ``_trans`` files
+carry percent transmittance.  Numbered ``sampleN`` files are enriched from
+``sample_references.xlsx``; descriptively named files are also discovered and
+paired by the rest of their filename.
 
 The xlsx is parsed with the standard library (zipfile + ElementTree) so the app
 does not gain an openpyxl dependency just to read one 16-row table.
@@ -131,9 +132,10 @@ def parse_log_name(filename):
 def discover_measured_samples(log_dir=LOG_DIR, reference_path=REFERENCE_XLSX):
     """Builds the list of measured samples available for plotting.
 
-    Each entry is a dict with the sample number, the variant suffix, both file
-    paths (either may be None), the matching reference-sheet row and a display
-    label.  Sorted by sample number, then variant.
+    Each entry is a dict with the sample number (or None for a named sample),
+    the variant suffix, both file paths (either may be None), the matching
+    reference-sheet row and a display label. Numbered samples are sorted first,
+    followed by descriptively named samples.
     """
     headers, reference_rows = read_reference_table(reference_path)
     if not os.path.isdir(log_dir):
@@ -144,23 +146,48 @@ def discover_measured_samples(log_dir=LOG_DIR, reference_path=REFERENCE_XLSX):
         if not filename.lower().endswith(".txt"):
             continue
         parsed = parse_log_name(filename)
-        if parsed is None:
-            continue
-        number, variant, mode = parsed
-        entry = grouped.setdefault((number, variant), {
+        if parsed is not None:
+            number, variant, mode = parsed
+            group_key = ("numbered", number, variant.lower())
+            label_name = None
+        else:
+            # Named exports such as ``PE_reynolds_abs.txt`` use the same
+            # pairing convention as numbered samples. Files without a mode
+            # marker (for example LastBkg.txt) are deliberately ignored.
+            mode = infer_mode(filename)
+            if mode is None:
+                continue
+            number = None
+            variant = ""
+            label_name = strip_mode_tokens(filename)
+            group_key = ("named", label_name.lower())
+
+        entry = grouped.setdefault(group_key, {
             "number": number,
             "variant": variant,
+            "name": label_name,
             "paths": {"absorbance": None, "transmittance": None},
         })
         entry["paths"][mode] = os.path.join(log_dir, filename)
 
     samples = []
-    for (number, variant) in sorted(grouped, key=lambda k: (k[0], k[1])):
-        entry = grouped[(number, variant)]
+    def sort_key(item):
+        entry = item[1]
+        if entry["number"] is not None:
+            return (0, entry["number"], entry["variant"].lower())
+        return (1, entry["name"].lower())
+
+    for _group_key, entry in sorted(grouped.items(), key=sort_key):
+        number = entry["number"]
+        variant = entry["variant"]
         reference = reference_rows.get(number, {})
         entry["reference"] = reference
-        entry["key"] = f"sample{number}" + (f"_{variant}" if variant else "")
-        entry["label"] = _build_label(number, variant, reference, headers)
+        if number is None:
+            entry["key"] = entry["name"]
+            entry["label"] = entry["name"].replace("_", " ")
+        else:
+            entry["key"] = f"sample{number}" + (f"_{variant}" if variant else "")
+            entry["label"] = _build_label(number, variant, reference, headers)
         samples.append(entry)
     return samples, headers
 
