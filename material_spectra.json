@@ -1,0 +1,23 @@
+{
+  "Nylon": {
+    "file": "logs_full_range/nylon_reynolds_abs.txt",
+    "format": "jcamp_log",
+    "quantity": "absorbance_base10",
+    "reference_thickness_um": null,
+    "note": "FTIR absorbance (YUNITS=Abs, verified base-10 against the paired _trans file). Physical thickness of the scanned film is not recorded."
+  },
+  "PE": {
+    "file": "logs_full_range/PE_reynolds_abs.txt",
+    "format": "jcamp_log",
+    "quantity": "absorbance_base10",
+    "reference_thickness_um": null,
+    "note": "FTIR absorbance (YUNITS=Abs, verified base-10 against the paired _trans file). Physical thickness of the scanned film is not recorded."
+  },
+  "EVOH": {
+    "file": "EVOHTransmissionPercentvsWavelength_in_nm_2000nm_to_5000nm.csv",
+    "format": "csv_wavelength_nm",
+    "quantity": "transmittance_fraction",
+    "reference_thickness_um": null,
+    "note": "Digitized transmission curve, 2000-5000 nm only. Values are fractions 0-1 despite 'Percent' in the filename; converted with A = -log10(T). Sample thickness unknown."
+  }
+}

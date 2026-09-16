@@ -204,30 +204,40 @@ One important implementation detail:
 
 The GUI uses the exact same shared physics engine as the scripted example, calling `run_simulation(...)` from `Simulation.py`. This means both interfaces accurately model Beer-Lambert bulk absorption as well as Fresnel interface reflections.
 
-The separate **Broadband Analysis / Export** window uses `BroadbandAnalysis.py`.
-It treats spectroscopy files marked `YUNITS=Abs` as base-10 absorbance by
-default, integrates `S(lambda) R(lambda) T(lambda)` only over valid spectral
-overlap, and reports measured vs predicted voltage, error, MAE/RMSE/MAPE/R².
+The separate **Broadband Analysis / Export** window is a thin UI over one shared
+pipeline, `run_broadband_analysis(config)` in `BroadbandPipeline.py`. The UI,
+graphs and Excel export only display its result.
 
-For each layer count `n` the predicted voltage is
+- `BroadbandAnalysis.py` – physics primitives (no UI or file I/O)
+- `BroadbandPipeline.py` – the full analysis: corrections, weighting, thickness, comparison
+- `SpectralData.py` – loaders for material spectra, responsivity/source/filter CSVs, source presets
+- `material_spectra.json` – per-material file, quantity and reference thickness `x_ref`
+- `experimental_detector_data.json` – V0, V_dark, flat-band placeholder and measured voltages
 
-    V(n) = V0 · [∫ W(λ) · 10^(-n·A(λ)) dλ / ∫ W(λ) dλ] · T_interface^n
+Forward model:
 
-Two corrections are on by default and can be switched off in the window:
+    T(λ, x)    = 10^(-A_ref(λ) · x / x_ref)              (base-10 absorbance)
+    W(λ)       = S(λ) · R(λ) · Π F_i(λ)                   (each curve = 0 outside its data)
+    T_spectral = ∫ W·T dλ / ∫ W dλ                        (over the material-covered part of W)
+    T_eff      = T_spectral · T_interface^layers          (interface factor only if enabled)
+    V_pred     = V_dark + (V0 − V_dark) · T_eff
 
-- **Baseline correction** – FTIR scans whose background does not match the
-  sample sit at a constant offset (about -0.03 A / 107 %T for the bundled Nylon
-  and PE logs). Integrated over a 2–12 µm band that offset outweighs the real
-  peaks and makes predicted voltage *rise* with layers, so the 5th percentile
-  of the in-band absorbance is subtracted and remaining negatives are clamped.
-- **Fresnel reflection loss** – each film has two air/polymer interfaces,
-  `T_interface = (1 - R)^2`, `R = ((n - 1)/(n + 1))^2` (≈0.92 for n = 1.5).
+Thickness modes: *layers × layer thickness* (needs `x_ref` in µm, reports µm),
+*layers × thickness ratio* (x_ref unknown, no µm; the ratio is an explicit
+assumption) and *reference-sample multiplier* (no layer matching to measurements).
+All bundled spectra have unknown `x_ref`.
 
-The bundled
-detector measurements are stored in `experimental_detector_data.json`; because
-measured response curves for those detector models are not bundled, their
-responsivity-weighted modes are clearly identified as rectangular in-band
-approximations.
+Weighting: detector is either a *flat band approximation* or a *loaded
+responsivity CSV*; source is *flat*, *blackbody approximation* (the HPIR104
+903.15 K preset comes from `component_database.json`) or a *measured CSV*;
+filter/window transmission CSVs can be multiplied in. If less than 99 % of the
+weight lies inside the material spectrum, results are marked **PARTIAL
+SPECTRAL COVERAGE** with 0–100 % bounds (the EVOH curve covers only 2–5 µm).
+
+Baseline subtraction, negative clamping and Fresnel interface loss are **off
+by default**. When enabled, the offset, clamped-point count and interface factor
+are reported, and raw and corrected predictions are shown side by side.
+No parameter is fitted to the measured voltages.
 
 ### `PE_data.yml`
 

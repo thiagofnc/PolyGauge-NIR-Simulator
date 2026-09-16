@@ -1,18 +1,24 @@
-"""Human-readable Excel export for broadband detector analysis."""
+"""Excel export for broadband detector analysis.
+
+Writes values taken directly from ``run_broadband_analysis``; it performs no
+integration or spectral physics of its own.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-# Per-layer spectral columns are written for at most this many layer counts so a
+# Per-thickness spectral columns are written for at most this many rows so a
 # 1000-point sweep does not produce an unusably wide sheet.
-MAX_SPECTRAL_LAYER_COLUMNS = 20
+MAX_SPECTRAL_COLUMNS = 20
 
 
 def _number(value):
     """openpyxl cannot write inf/nan; show them as blank cells instead."""
     if value is None:
         return None
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
     try:
         value = float(value)
     except (TypeError, ValueError):
@@ -20,7 +26,17 @@ def _number(value):
     return value if value == value and abs(value) != float("inf") else None
 
 
-def export_broadband_workbook(path, analysis, metadata, experimental_rows=None):
+def _text(value):
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, (tuple, list)):
+        return ", ".join(f"{v:g}" if isinstance(v, (int, float)) else str(_text(v)) for v in value) or "—"
+    return value if isinstance(value, str) else _number(value)
+
+
+def export_broadband_workbook(path, result, experimental_rows=None):
     try:
         from openpyxl import Workbook
         from openpyxl.chart import BarChart, Reference, ScatterChart, Series
@@ -35,10 +51,13 @@ def export_broadband_workbook(path, analysis, metadata, experimental_rows=None):
     wb = Workbook()
     header_fill = PatternFill("solid", fgColor="1F4E78")
     section_fill = PatternFill("solid", fgColor="D9E2F3")
+    alert_fill = PatternFill("solid", fgColor="F8CBAD")
     header_font = Font(color="FFFFFF", bold=True)
     bold = Font(bold=True)
-    rows = analysis["rows"]
+    rows = result["rows"]
     n_rows = len(rows)
+    coverage = result["coverage"]
+    corrections = result["corrections"]
 
     def style_header(sheet, row_index):
         for cell in sheet[row_index]:
@@ -51,149 +70,166 @@ def export_broadband_workbook(path, analysis, metadata, experimental_rows=None):
         cell = sheet.cell(row=sheet.max_row, column=1)
         cell.font, cell.fill = Font(bold=True, size=12), section_fill
 
+    def pairs(sheet, items):
+        for label, value in items:
+            sheet.append([label, _text(value)])
+            sheet.cell(row=sheet.max_row, column=1).font = bold
+            sheet.cell(row=sheet.max_row, column=2).alignment = Alignment(wrap_text=True, vertical="top")
+
     # ---------------------------------------------------------------- Summary
     ws = wb.active
     ws.title = "Summary"
     ws.append(["Broadband Spectral Detector Analysis"])
     ws["A1"].font = Font(size=16, bold=True)
-    ws.append(["Absorbance spectrum → Beer-Lambert per wavelength → detector-weighted integral → predicted voltage"])
+    ws.append(["T(λ,x) = 10^(-A(λ)·x/x_ref);  T_eff = ∫W·T dλ / ∫W dλ · T_interface;  "
+               "V = V_dark + (V0 − V_dark)·T_eff"])
     ws.append([])
-
-    section(ws, "Experiment settings")
-    for label, key in [
-        ("Material", "material"), ("Spectrum file", "spectrum_source"), ("Detector", "detector"),
-        ("Detector weighting", "weighting_mode"), ("Integration range (nm)", "wavelength_range"),
-        ("No-film voltage V0 (mV)", "no_film_voltage_mv"), ("Simulation input", "simulation_input"),
-        ("Reference thickness", "reference_thickness"), ("Absorbance convention", "absorbance_mode"),
-        ("Baseline correction", "baseline_correction"), ("Baseline offset removed (A)", "baseline_offset"),
-        ("Negative absorbance clamped", "clamp_negative"), ("Fresnel reflection loss", "fresnel"),
-        ("Interface transmission per layer", "layer_interface_transmission"),
-        ("Assumptions / notes", "notes"),
-    ]:
-        value = metadata.get(key, "")
-        if isinstance(value, bool):
-            value = "Yes" if value else "No"
-        ws.append([label, value if isinstance(value, str) else _number(value)])
+    if coverage["partial"]:
+        ws.append([f"PARTIAL SPECTRAL COVERAGE: material spectrum covers {coverage['fraction']:.1%} of the "
+                   "detector/source weight. Predictions and errors are NOT fully valid."])
+        ws.cell(row=ws.max_row, column=1).fill = alert_fill
         ws.cell(row=ws.max_row, column=1).font = bold
-        ws.cell(row=ws.max_row, column=2).alignment = Alignment(wrap_text=True, vertical="top")
+    for warning in result["warnings"]:
+        if not warning.startswith("PARTIAL"):
+            ws.append([f"Warning: {warning}"])
     ws.append([])
 
-    if metadata.get("inspected_scale") is not None:
-        section(ws, f"Headline result ({metadata.get('simulation_input', 'Layer count')} = {metadata['inspected_scale']:g})")
-        for label, key in [("Measured (mV)", "inspected_measured_mv"), ("Predicted from spectral model (mV)", "inspected_predicted_mv"),
-                           ("Error (mV)", "inspected_error_mv"), ("Error (%)", "inspected_error_percent")]:
-            ws.append([label, _number(metadata.get(key))])
-            ws.cell(row=ws.max_row, column=1).font = bold
-        ws.append([])
-
-    section(ws, "Measured vs predicted")
-    ws.append(["Layer Count", "Measured Voltage (mV)", "Predicted Voltage (mV)", "Error (mV)",
-               "Absolute Error (mV)", "Percent Error (%)", "Absolute Percent Error (%)",
-               "Measured Transmission V/V0", "Predicted Transmission V/V0", "Spectral Transmission",
-               "Interface Transmission", "ln(V0/V) Measured", "ln(V0/V) Predicted"])
-    header_row = ws.max_row
-    style_header(ws, header_row)
-    for row in rows:
-        ws.append([_number(row["thickness_scale"]), _number(row["measured_voltage_mv"]),
-                   _number(row["predicted_voltage_mv"]), _number(row["error_mv"]),
-                   _number(row["absolute_error_mv"]), _number(row["percent_error"]),
-                   _number(row["absolute_percent_error"]), _number(row["measured_transmission"]),
-                   _number(row["predicted_transmission"]), _number(row.get("spectral_transmission")),
-                   _number(row.get("interface_transmission")), _number(row["measured_attenuation_natural"]),
-                   _number(row["predicted_attenuation_natural"])])
-    first_data, last_data = header_row + 1, header_row + n_rows
-    for r in range(first_data, last_data + 1):
-        for c in range(2, 8):
-            ws.cell(row=r, column=c).number_format = "0.0"
-        for c in range(8, 14):
-            ws.cell(row=r, column=c).number_format = "0.0000"
+    material, thickness, weighting, voltages = result["material"], result["thickness"], result["weighting"], result["voltages"]
+    section(ws, "Material & thickness")
+    pairs(ws, [("Material", material["name"]), ("Spectrum file", material["source"]),
+               ("Absorbance convention used", material["convention"]),
+               ("Reference thickness x_ref (µm)", material["reference_thickness_um"] or "UNKNOWN"),
+               ("Thickness mode", thickness["description"]),
+               ("Absolute thickness in µm reported", thickness["reports_um"]),
+               ("Material note", material["note"])])
     ws.append([])
+    section(ws, "Detector, source & voltages")
+    pairs(ws, [("Detector dataset", weighting["detector_name"]),
+               ("Detector weighting", weighting["detector_description"]),
+               ("Source weighting", weighting["source_description"]),
+               ("Optical terms", weighting["optical_terms"] or "none"),
+               ("Wavelength window (nm)", weighting["window_nm"]),
+               ("Weight domain (nm)", weighting["weight_domain_nm"]),
+               ("No-film voltage V0 (mV)", voltages["no_film_voltage_mv"]),
+               ("Dark voltage V_dark (mV)", voltages["dark_voltage_mv"])])
+    ws.append([])
+    section(ws, "Spectral coverage")
+    pairs(ws, [("Coverage fraction", coverage["fraction"]), ("Partial coverage", coverage["partial"]),
+               ("Material covers (nm)", coverage["covered_range_nm"]),
+               ("Negative absorbance points in active region",
+                f"{result['negative_absorbance']['points']} of {result['negative_absorbance']['total_points']} "
+                f"({result['negative_absorbance']['percent']:.1f}%)")])
+    ws.append([])
+    section(ws, "Optional corrections")
+    pairs(ws, [("Baseline subtraction", corrections["baseline_enabled"]),
+               ("Baseline offset subtracted (A)", corrections["baseline_offset"]),
+               ("Negative clamp", corrections["clamp_enabled"]),
+               ("Points clamped", f"{corrections['clamped_points']} ({corrections['clamped_percent']:.1f}%)"),
+               ("Interface correction", corrections["interface_enabled"]),
+               ("Refractive index n", corrections["refractive_index"]),
+               ("Interface T per layer", corrections["interface_per_layer"]),
+               ("Interface assumptions", corrections["interface_assumptions"])])
+    ws.append([])
+
     section(ws, "Model agreement metrics")
-    metrics = analysis["metrics"]
-    for label, key in [("MAE (mV)", "mae_mv"), ("RMSE (mV)", "rmse_mv"),
-                       ("MAPE (%)", "mape_percent"), ("R² (measured vs predicted voltage)", "r_squared")]:
-        ws.append([label, _number(metrics.get(key))])
-        ws.cell(row=ws.max_row, column=1).font = bold
+    ws.append(["Metric", "Raw model", "Corrected model"])
+    style_header(ws, ws.max_row)
+    for label, key in [("n compared", "n"), ("MAE (mV)", "mae_mv"), ("RMSE (mV)", "rmse_mv"),
+                       ("MAPE (%)", "mape_percent"), ("Agreement R² (1:1 line)", "r_squared")]:
+        ws.append([label, _number(result["raw_metrics"][key]), _number(result["metrics"][key])])
+    if coverage["partial"]:
+        ws.append(["Metrics are computed under PARTIAL SPECTRAL COVERAGE and are not fully valid."])
+        ws.cell(row=ws.max_row, column=1).fill = alert_fill
 
-    # ------------------------------------------------- Spectral calculation
-    spectral = analysis["spectral"]
-    spectra_by_scale = analysis.get("spectra_by_scale", {spectral["thickness_scale"]: spectral})
-    layer_scales = list(spectra_by_scale)[:MAX_SPECTRAL_LAYER_COLUMNS]
-    wavelength = spectral["wavelength_nm"]
-    n = len(wavelength)
-    raw = spectral.get("raw_absorbance", spectral["absorbance"])
-    source = spectral.get("source")
-    response = spectral.get("responsivity")
+    # ---------------------------------------------------------------- Results
+    res = wb.create_sheet("Results")
+    res.append(["Layer Count", "Thickness x (µm)", "x / x_ref", "Measured Voltage (mV)", "Raw Predicted Voltage (mV)",
+                "Predicted Voltage (mV)", "Predicted V lower bound (mV)", "Predicted V upper bound (mV)",
+                "Measured Transmission", "Raw Predicted Transmission", "Predicted Transmission",
+                "Measured ln(1/T)", "Predicted ln(1/T)", "Error (mV)", "Absolute Error (mV)", "Percent Error (%)",
+                "Absolute Percent Error (%)", "Raw Error (mV)", "Raw Percent Error (%)", "Coverage Fraction",
+                "Partial Coverage"])
+    style_header(res, 1)
+    for row in rows:
+        res.append([_number(row["layer_count"]), _number(row["thickness_um"]), _number(row["thickness_scale"]),
+                    _number(row["measured_voltage_mv"]), _number(row["raw_predicted_voltage_mv"]),
+                    _number(row["predicted_voltage_mv"]), _number(row["predicted_voltage_bounds_mv"][0]),
+                    _number(row["predicted_voltage_bounds_mv"][1]), _number(row["measured_transmission"]),
+                    _number(row["raw_effective_transmission"]), _number(row["predicted_transmission"]),
+                    _number(row["measured_attenuation_natural"]), _number(row["predicted_attenuation_natural"]),
+                    _number(row["error_mv"]), _number(row["absolute_error_mv"]), _number(row["percent_error"]),
+                    _number(row["absolute_percent_error"]), _number(row["raw_error_mv"]),
+                    _number(row["raw_percent_error"]), _number(row["coverage_fraction"]),
+                    _number(row["partial_coverage"])])
+        if row["partial_coverage"]:
+            for cell in res[res.max_row]:
+                cell.fill = alert_fill
+    first, last = 2, n_rows + 1
 
-    spec_ws = wb.create_sheet("Spectral Calculation")
-    base_headers = ["Wavelength (nm)", "Raw Absorbance", "Absorbance Used (1 layer)", "Source S(λ)",
-                    "Detector Responsivity R(λ)", "Weight W(λ)"]
-    layer_headers = []
-    for scale in layer_scales:
-        layer_headers += [f"T(λ) @ {scale:g}", f"W·T @ {scale:g}"]
-    spec_ws.append(base_headers + layer_headers)
-    style_header(spec_ws, 1)
-    for i in range(n):
-        values = [float(wavelength[i]), float(raw[i]), float(spectral["absorbance"][i]),
-                  None if source is None else float(source[i]),
-                  None if response is None else float(response[i]),
-                  float(spectral["weight"][i])]
-        for scale in layer_scales:
-            result = spectra_by_scale[scale]
-            interface = result.get("interface_transmission", 1.0)
-            values += [_number(result["transmission"][i] * interface),
-                       _number(result["weighted_transmitted"][i] * interface)]
-        spec_ws.append(values)
+    # --------------------------------------------------- Spectral calculation
+    grid = result["grid"]
+    wavelength = grid["wavelength_nm"]
+    n_points = len(wavelength)
+    spectral_indices = list(range(min(n_rows, MAX_SPECTRAL_COLUMNS)))
+    spec = wb.create_sheet("Spectral Calculation")
+    headers = ["Wavelength (nm)", "Inside Material Coverage", "Raw Absorbance (x_ref)", "Absorbance Used (x_ref)",
+               "Source S(λ)", "Detector Responsivity R(λ)", "Optical Terms Product", "Weight W(λ)"]
+    for i in spectral_indices:
+        label = f"x/x_ref={rows[i]['thickness_scale']:g}"
+        headers += [f"T(λ) {label}", f"W·T {label}"]
+    spec.append(headers)
+    style_header(spec, 1)
+    terms_product = grid["optical_terms_product"]
+    for p in range(n_points):
+        values = [float(wavelength[p]), "Yes" if grid["covered_mask"][p] else "No",
+                  _number(grid["raw_absorbance"][p]), _number(grid["absorbance_used"][p]),
+                  None if grid["source"] is None else float(grid["source"][p]),
+                  None if grid["responsivity"] is None else float(grid["responsivity"][p]),
+                  None if terms_product is None else float(terms_product[p]), float(grid["weight"][p])]
+        for i in spectral_indices:
+            values += [_number(result["spectra"][i]["transmission"][p]),
+                       _number(result["spectra"][i]["weighted_transmitted"][p])]
+        spec.append(values)
 
     # ------------------------------------------------------ Layer predictions
-    layer_ws = wb.create_sheet("Layer Predictions")
-    layer_ws.append(["Layer Count", "∫W(λ)dλ", "∫W(λ)T(λ)dλ", "Spectral Transmission",
-                     "Interface Transmission", "Effective Transmission", "Effective Attenuation ln(V0/V)",
-                     "Effective Absorbance -log10(V/V0)", "Predicted Voltage (mV)"])
-    style_header(layer_ws, 1)
-    try:
-        import numpy as np
-        trapezoid = getattr(np, "trapezoid", None) or np.trapz
-    except ImportError:  # pragma: no cover - numpy is a hard dependency elsewhere.
-        trapezoid = None
+    layer = wb.create_sheet("Layer Predictions")
+    layer.append(["Layer Count", "Thickness x (µm)", "x / x_ref", "∫W dλ (total)", "∫W dλ (covered)",
+                  "∫W·T dλ (covered)", "Spectral Transmission", "Interface Transmission", "Effective Transmission",
+                  "Effective Attenuation ln(1/T)", "Effective Absorbance log10(1/T)", "Predicted Voltage (mV)"])
+    style_header(layer, 1)
     for row in rows:
-        result = spectra_by_scale.get(row["thickness_scale"])
-        integral_w = integral_wt = None
-        if result is not None and trapezoid is not None:
-            integral_w = float(trapezoid(result["weight"], result["wavelength_nm"]))
-            integral_wt = float(trapezoid(result["weighted_transmitted"], result["wavelength_nm"]))
-        layer_ws.append([_number(row["thickness_scale"]), integral_w, integral_wt,
-                         _number(row.get("spectral_transmission")), _number(row.get("interface_transmission")),
-                         _number(row["predicted_transmission"]), _number(row["predicted_attenuation_natural"]),
-                         _number(row["predicted_absorbance_base10"]), _number(row["predicted_voltage_mv"])])
+        layer.append([_number(row["layer_count"]), _number(row["thickness_um"]), _number(row["thickness_scale"]),
+                      _number(row["weight_integral_total"]), _number(row["weight_integral_covered"]),
+                      _number(row["weighted_transmitted_integral"]), _number(row["spectral_transmission"]),
+                      _number(row["interface_transmission"]), _number(row["predicted_transmission"]),
+                      _number(row["predicted_attenuation_natural"]), _number(row["predicted_absorbance_base10"]),
+                      _number(row["predicted_voltage_mv"])])
 
     # ------------------------------------------------------ Experimental data
-    exp_ws = wb.create_sheet("Experimental Data")
-    exp_ws.append(["Material", "Detector", "Layer Count", "Measured Voltage (mV)", "No-film Voltage (mV)",
-                   "Measured V/V0"])
-    style_header(exp_ws, 1)
+    exp = wb.create_sheet("Experimental Data")
+    exp.append(["Material", "Detector", "Layer Count", "Measured Voltage (mV)", "No-film Voltage (mV)",
+                "Dark Voltage (mV)"])
+    style_header(exp, 1)
     for row in experimental_rows or []:
-        v0 = row.get("no_film_voltage_mv")
-        measured = row.get("measured_voltage_mv")
-        exp_ws.append([row.get("material"), row.get("detector"), row.get("layer_count"), measured, v0,
-                       measured / v0 if measured is not None and v0 else None])
+        exp.append([row.get("material"), row.get("detector"), row.get("layer_count"), row.get("measured_voltage_mv"),
+                    row.get("no_film_voltage_mv"), row.get("dark_voltage_mv")])
 
     # ----------------------------------------------------------------- Charts
-    chart_ws = wb.create_sheet("Charts")
+    charts = wb.create_sheet("Charts")
+    x_col, x_title = (2, "Thickness x (µm)") if result["thickness"]["reports_um"] else (
+        (1, "Layer count") if rows and rows[0]["layer_count"] is not None else (3, "x / x_ref"))
 
-    def scatter(title, x_title, y_title):
+    def scatter(title, x_axis, y_axis):
         chart = ScatterChart()
-        chart.title, chart.style = title, 13
-        chart.x_axis.title, chart.y_axis.title = x_title, y_title
-        chart.height, chart.width = 9, 16
-        # Excel hides axes on new scatter charts unless delete is explicitly off.
+        chart.title, chart.style, chart.height, chart.width = title, 13, 9, 16
+        chart.x_axis.title, chart.y_axis.title = x_axis, y_axis
         chart.x_axis.delete = False
         chart.y_axis.delete = False
         return chart
 
-    def add_series(chart, sheet, x_col, y_col, first, last, title, markers=False, line=True):
-        series = Series(Reference(sheet, min_col=y_col, min_row=first, max_row=last),
-                        Reference(sheet, min_col=x_col, min_row=first, max_row=last), title=title)
+    def add_series(chart, sheet, xc, yc, r0, r1, title, markers=False, line=True):
+        series = Series(Reference(sheet, min_col=yc, min_row=r0, max_row=r1),
+                        Reference(sheet, min_col=xc, min_row=r0, max_row=r1), title=title)
         series.smooth = False
         if markers:
             series.marker.symbol, series.marker.size = "circle", 7
@@ -202,58 +238,60 @@ def export_broadband_workbook(path, analysis, metadata, experimental_rows=None):
         if not line:
             series.graphicalProperties.line.noFill = True
         chart.series.append(series)
-        return series
 
-    compare_chart = scatter("Measured vs Predicted Voltage", "Layer count", "Detector voltage (mV)")
-    add_series(compare_chart, ws, 1, 3, first_data, last_data, "Predicted (spectral model)", markers=True)
-    add_series(compare_chart, ws, 1, 2, first_data, last_data, "Measured", markers=True, line=False)
-    chart_ws.add_chart(compare_chart, "A1")
+    suffix = " [PARTIAL COVERAGE]" if coverage["partial"] else ""
+    compare = scatter("Measured vs Predicted Voltage" + suffix, x_title, "Detector voltage (mV)")
+    add_series(compare, res, x_col, 5, first, last, "Raw prediction", markers=True)
+    if corrections["any_enabled"]:
+        add_series(compare, res, x_col, 6, first, last, "Corrected prediction", markers=True)
+    add_series(compare, res, x_col, 4, first, last, "Measured", markers=True, line=False)
+    charts.add_chart(compare, "A1")
 
-    parity_chart = scatter("Parity: Predicted vs Measured", "Measured voltage (mV)", "Predicted voltage (mV)")
-    add_series(parity_chart, ws, 2, 3, first_data, last_data, "Layer counts", markers=True, line=False)
-    chart_ws.add_chart(parity_chart, "K1")
+    parity = scatter("Parity: Predicted vs Measured" + suffix, "Measured voltage (mV)", "Predicted voltage (mV)")
+    add_series(parity, res, 4, 6, first, last, "Predicted", markers=True, line=False)
+    charts.add_chart(parity, "K1")
 
-    error_chart = BarChart()
-    error_chart.title, error_chart.height, error_chart.width = "Prediction Error (%)", 9, 16
-    error_chart.y_axis.title, error_chart.x_axis.title = "Error (%)  + = over-predicts", "Layer count"
-    error_chart.x_axis.delete = False
-    error_chart.y_axis.delete = False
-    error_chart.add_data(Reference(ws, min_col=6, min_row=header_row, max_row=last_data), titles_from_data=True)
-    error_chart.set_categories(Reference(ws, min_col=1, min_row=first_data, max_row=last_data))
-    chart_ws.add_chart(error_chart, "A20")
+    attenuation = scatter("Effective Attenuation ln(1/T)" + suffix, x_title, "ln(1/T)")
+    add_series(attenuation, res, x_col, 13, first, last, "Predicted", markers=True)
+    add_series(attenuation, res, x_col, 12, first, last, "Measured", markers=True, line=False)
+    charts.add_chart(attenuation, "A20")
 
-    attenuation_chart = scatter("Effective Attenuation vs Layers", "Layer count", "ln(V0/V)")
-    add_series(attenuation_chart, ws, 1, 13, first_data, last_data, "Predicted", markers=True)
-    add_series(attenuation_chart, ws, 1, 12, first_data, last_data, "Measured", markers=True, line=False)
-    chart_ws.add_chart(attenuation_chart, "K20")
+    error = BarChart()
+    error.title, error.height, error.width = "Prediction Error (%)" + suffix, 9, 16
+    error.x_axis.title, error.y_axis.title = "Row", "Error (%)  + = over-predicts"
+    error.x_axis.delete = False
+    error.y_axis.delete = False
+    error.add_data(Reference(res, min_col=16, min_row=1, max_row=last), titles_from_data=True)
+    error.set_categories(Reference(res, min_col=x_col, min_row=first, max_row=last))
+    charts.add_chart(error, "K20")
 
-    absorbance_chart = scatter("Absorbance Spectrum", "Wavelength (nm)", "Absorbance")
-    add_series(absorbance_chart, spec_ws, 1, 2, 2, n + 1, "Raw")
-    add_series(absorbance_chart, spec_ws, 1, 3, 2, n + 1, "Used by model")
-    chart_ws.add_chart(absorbance_chart, "A39")
+    absorbance = scatter("Reference Absorbance Spectrum", "Wavelength (nm)", "Absorbance")
+    add_series(absorbance, spec, 1, 3, 2, n_points + 1, "Raw")
+    if corrections["any_enabled"]:
+        add_series(absorbance, spec, 1, 4, 2, n_points + 1, "Used")
+    charts.add_chart(absorbance, "A39")
 
-    transmission_chart = scatter("Transmission Spectrum per Layer Count", "Wavelength (nm)", "Transmission")
-    for index, scale in enumerate(layer_scales):
-        add_series(transmission_chart, spec_ws, 1, 7 + 2 * index, 2, n + 1, f"{scale:g}")
-    chart_ws.add_chart(transmission_chart, "K39")
+    transmission = scatter("Spectral Transmission T(λ)", "Wavelength (nm)", "T")
+    for column_index, i in enumerate(spectral_indices):
+        add_series(transmission, spec, 1, 9 + 2 * column_index, 2, n_points + 1,
+                   f"x/x_ref={rows[i]['thickness_scale']:g}")
+    charts.add_chart(transmission, "K39")
 
-    selected = analysis.get("selected_scale", layer_scales[0])
-    selected_index = layer_scales.index(selected) if selected in layer_scales else 0
-    contribution_chart = scatter(f"Wavelengths Contributing to Detector ({layer_scales[selected_index]:g})",
-                                 "Wavelength (nm)", "Weighted contribution")
-    add_series(contribution_chart, spec_ws, 1, 6, 2, n + 1, "No film W(λ)")
-    add_series(contribution_chart, spec_ws, 1, 8 + 2 * selected_index, 2, n + 1, "With film W·T")
-    chart_ws.add_chart(contribution_chart, "A58")
+    inspected = result["inspected_index"] if result["inspected_index"] in spectral_indices else 0
+    contribution = scatter(f"Weighted Contribution (x/x_ref={rows[inspected]['thickness_scale']:g})",
+                           "Wavelength (nm)", "Weighted value")
+    add_series(contribution, spec, 1, 8, 2, n_points + 1, "W(λ)")
+    add_series(contribution, spec, 1, 10 + 2 * inspected, 2, n_points + 1, "W·T")
+    charts.add_chart(contribution, "A58")
 
     # ----------------------------------------------------------------- Layout
-    ws.column_dimensions["A"].width = 36
-    ws.column_dimensions["B"].width = 44
-    for column_index in range(3, 14):
-        ws.column_dimensions[get_column_letter(column_index)].width = 16
-    for sheet in (spec_ws, layer_ws, exp_ws):
-        sheet.freeze_panes = "B2" if sheet is spec_ws else "A2"
+    ws.column_dimensions["A"].width = 44
+    ws.column_dimensions["B"].width = 70
+    ws.column_dimensions["C"].width = 18
+    for sheet in (res, spec, layer, exp):
+        sheet.freeze_panes = "B2"
         for column_index in range(1, sheet.max_column + 1):
             header = sheet.cell(row=1, column=column_index).value
-            sheet.column_dimensions[get_column_letter(column_index)].width = max(14, min(32, len(str(header or "")) + 4))
+            sheet.column_dimensions[get_column_letter(column_index)].width = max(14, min(30, len(str(header or "")) + 3))
     wb.save(path)
     return str(path)

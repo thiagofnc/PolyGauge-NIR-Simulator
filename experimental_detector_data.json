@@ -2,9 +2,11 @@
   "2-12 um detector": {
     "display_name": "2-12 µm detector",
     "no_film_voltage_mv": 498.0,
-    "wavelength_min_nm": 2000.0,
-    "wavelength_max_nm": 12000.0,
-    "responsivity_note": "No measured responsivity curve is bundled; detector weighting uses a rectangular in-band approximation.",
+    "dark_voltage_mv": null,
+    "flat_band_min_nm": 2000.0,
+    "flat_band_max_nm": 12000.0,
+    "responsivity_csv": null,
+    "responsivity_note": "No measured responsivity curve is available. The 2000-12000 nm band is only usable as a flat band approximation. Dark voltage has not been measured.",
     "materials": {
       "Nylon": {"1": 310.0, "2": 260.0, "3": 215.0, "4": 170.0},
       "EVOH": {"1": 300.0, "2": 200.0, "3": 160.0, "4": 115.0},
@@ -14,9 +16,11 @@
   "Hamamatsu": {
     "display_name": "Hamamatsu detector",
     "no_film_voltage_mv": 73.0,
-    "wavelength_min_nm": 2000.0,
-    "wavelength_max_nm": 12000.0,
-    "responsivity_note": "The exact Hamamatsu model/response curve is not specified; detector weighting uses a rectangular selected-band approximation.",
+    "dark_voltage_mv": null,
+    "flat_band_min_nm": 2000.0,
+    "flat_band_max_nm": 12000.0,
+    "responsivity_csv": null,
+    "responsivity_note": "Exact Hamamatsu model and responsivity curve are not recorded; the 2000-12000 nm band is a placeholder flat band approximation. Dark voltage has not been measured.",
     "materials": {
       "Nylon": {"1": 51.0, "2": 42.0, "3": 38.0, "4": 31.0},
       "EVOH": {"1": 45.0, "2": 35.0, "3": 28.0, "4": 20.0},
