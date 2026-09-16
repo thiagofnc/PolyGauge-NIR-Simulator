@@ -26,6 +26,12 @@ TRANS_TOKENS = ("trans", "transmittance", "transmission")
 
 _SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
+# Display names for descriptively named logs whose filename can't carry the
+# intended label (keys are the lowercased name with mode tokens stripped).
+NAMED_SAMPLE_LABELS = {
+    "evoh_pe": "EVOH + PE",
+}
+
 
 # --- Reference sheet -------------------------------------------------------
 
@@ -184,7 +190,8 @@ def discover_measured_samples(log_dir=LOG_DIR, reference_path=REFERENCE_XLSX):
         entry["reference"] = reference
         if number is None:
             entry["key"] = entry["name"]
-            entry["label"] = entry["name"].replace("_", " ")
+            entry["label"] = NAMED_SAMPLE_LABELS.get(
+                entry["name"].lower(), entry["name"].replace("_", " "))
         else:
             entry["key"] = f"sample{number}" + (f"_{variant}" if variant else "")
             entry["label"] = _build_label(number, variant, reference, headers)
