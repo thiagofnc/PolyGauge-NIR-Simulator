@@ -17,6 +17,7 @@ from tkinter import filedialog
 from MeasuredData import (LOG_DIR, discover_measured_samples, external_group_key,
                           infer_mode, load_log_spectrum, strip_mode_tokens,
                           wavenumber_to_nm)
+from BroadbandUI import BroadbandAnalysisWindow
 
 # Categorical series palette, stepped for the dark chart surface (#2b2b2b) and
 # assigned to samples in this fixed order. Past eight samples the hues repeat
@@ -421,6 +422,12 @@ class WebGaugingApp(ctk.CTk):
                       fg_color="#6b3fa0", hover_color="#7d51bd", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkButton(self.data_panel, text="MEASURED SAMPLES", command=self.show_measured_samples,
                       fg_color="#a15c00", hover_color="#c47200", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkButton(self.data_panel, text="BROADBAND ANALYSIS / EXPORT", command=self.show_broadband_analysis,
+                      fg_color="#8b4a9c", hover_color="#a45bb6", font=("Arial", 15, "bold"), height=36).pack(fill="x", padx=20, pady=(0, 10))
+
+    def show_broadband_analysis(self):
+        window = BroadbandAnalysisWindow(self)
+        window.transient(self)
 
     # --- UI Builders ---
     def add_sensors_from_db(self):

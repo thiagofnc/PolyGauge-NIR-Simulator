@@ -166,6 +166,8 @@ The GUI currently provides:
 - per-channel signal readouts
 - popup material spectral viewer
 - material absorbance overlay viewer
+- broadband spectral detector analysis with measured-vs-predicted comparison,
+  selectable diagnostic graphs, and formatted Excel export
 - channel matrix viewer for checking whether the selected filters/sensors can separate material thicknesses
 - ranked source/filter/sensor combination search driven by `component_database.json`
 
@@ -201,6 +203,31 @@ Default startup configuration is already meaningful:
 One important implementation detail:
 
 The GUI uses the exact same shared physics engine as the scripted example, calling `run_simulation(...)` from `Simulation.py`. This means both interfaces accurately model Beer-Lambert bulk absorption as well as Fresnel interface reflections.
+
+The separate **Broadband Analysis / Export** window uses `BroadbandAnalysis.py`.
+It treats spectroscopy files marked `YUNITS=Abs` as base-10 absorbance by
+default, integrates `S(lambda) R(lambda) T(lambda)` only over valid spectral
+overlap, and reports measured vs predicted voltage, error, MAE/RMSE/MAPE/R².
+
+For each layer count `n` the predicted voltage is
+
+    V(n) = V0 · [∫ W(λ) · 10^(-n·A(λ)) dλ / ∫ W(λ) dλ] · T_interface^n
+
+Two corrections are on by default and can be switched off in the window:
+
+- **Baseline correction** – FTIR scans whose background does not match the
+  sample sit at a constant offset (about -0.03 A / 107 %T for the bundled Nylon
+  and PE logs). Integrated over a 2–12 µm band that offset outweighs the real
+  peaks and makes predicted voltage *rise* with layers, so the 5th percentile
+  of the in-band absorbance is subtracted and remaining negatives are clamped.
+- **Fresnel reflection loss** – each film has two air/polymer interfaces,
+  `T_interface = (1 - R)^2`, `R = ((n - 1)/(n + 1))^2` (≈0.92 for n = 1.5).
+
+The bundled
+detector measurements are stored in `experimental_detector_data.json`; because
+measured response curves for those detector models are not bundled, their
+responsivity-weighted modes are clearly identified as rectangular in-band
+approximations.
 
 ### `PE_data.yml`
 
