@@ -24,6 +24,7 @@ from BroadbandPipeline import (BASELINE_AUTO, BASELINE_OFF, BASELINE_ON, DETECTO
                                DETECTOR_RESPONSIVITY, LAYERS_PHYSICAL, LAYERS_RATIO, REFERENCE_MULTIPLIER,
                                SOURCE_BLACKBODY, SOURCE_FLAT, SOURCE_MEASURED, BroadbandConfig,
                                run_broadband_analysis)
+from BroadbandSheetUI import choose_measured_points
 from SpectralData import (load_detector_definitions, load_material_library, load_source_presets,
                           load_spectral_curve_csv)
 
@@ -40,6 +41,10 @@ GRAPH_WEIGHTING = "Detector + source weighting"
 GRAPH_CONTRIBUTION = "Where the signal comes from"
 GRAPH_TYPES = [GRAPH_VOLTAGE, GRAPH_EFFECTIVE_T, GRAPH_ERROR, GRAPH_PARITY, GRAPH_ATTENUATION,
                GRAPH_ABSORBANCE, GRAPH_TRANSMISSION, GRAPH_WEIGHTING, GRAPH_CONTRIBUTION]
+
+MEASURED_BUILTIN = "Built-in detector data"
+MEASURED_FILE = "From an Excel/CSV file\u2026"
+MEASURED_SOURCES = [MEASURED_BUILTIN, MEASURED_FILE]
 
 MODE_PREDICT = "Predict voltage"
 MODE_ESTIMATE = "Estimate thickness"
@@ -107,6 +112,7 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
         self.responsivity_curve = None
         self.source_curve = None
         self.optical_terms = []
+        self.imported_measurements = None      # {"points", "source", "no_film_voltage_mv", ...}
         self.result = None
         self.advanced_visible = False
         self.details_visible = False
@@ -164,6 +170,9 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
                                    self._material_changed)
         self.detector_var = option(basics, "2. Detector", self._detector_labels(), self._detector_labels()[0],
                                    lambda _v: self._detector_changed())
+        self.measured_source_var = option(basics, "Measured data", MEASURED_SOURCES, MEASURED_BUILTIN,
+                                          self._measured_source_changed)
+        self.measured_note = note(basics, "#94a3b8")
         ctk.CTkLabel(basics, text="3. Mode", anchor="w", font=("Arial", 13, "bold")).pack(fill="x", padx=10, pady=(12, 2))
         self.mode_var = ctk.StringVar(value=MODE_PREDICT)
         ctk.CTkSegmentedButton(basics, values=MODES, variable=self.mode_var,
@@ -317,6 +326,8 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
     def _default_value(self):
         """A starting value that suits the current material, detector and mode."""
         if self.mode_var.get() == MODE_ESTIMATE:
+            if self._using_imported():
+                return f"{self.imported_measurements['points'][0][1]:g}"
             measured = self._measured_voltages()
             if measured:
                 return f"{measured[min(measured)]:g}"
@@ -325,8 +336,53 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
         return "1" if THICKNESS_MODES[self.thickness_mode_var.get()] == REFERENCE_MULTIPLIER else "3"
 
     def _measured_voltages(self):
+        """Built-in measurements for this material and detector, keyed by layer count."""
         detector = self.detectors[self._detector_key()]
         return {int(k): float(v) for k, v in detector.get("materials", {}).get(self.material_var.get(), {}).items()}
+
+    def _using_imported(self):
+        return self.measured_source_var.get() == MEASURED_FILE and self.imported_measurements is not None
+
+    def _measured_source_changed(self, choice):
+        if choice != MEASURED_FILE:
+            self.imported_measurements = None
+            self._update_measured_note()
+            self.update_analysis()
+            return
+        path = filedialog.askopenfilename(
+            parent=self, title="Measured data (Excel or CSV)",
+            filetypes=[("Spreadsheets", "*.xlsx *.xlsm *.csv *.txt"), ("All files", "*.*")])
+        if path:
+            try:
+                caption = "x/x_ref" if THICKNESS_MODES[self.thickness_mode_var.get()] == REFERENCE_MULTIPLIER \
+                    else "film layers"
+                chosen = choose_measured_points(self, path, caption)
+            except Exception as exc:
+                messagebox.showerror("Could not open that file", str(exc), parent=self)
+                chosen = None
+            if chosen:
+                self.imported_measurements = chosen
+                if chosen.get("no_film_voltage_mv") is not None:
+                    self.v0_var.set(f"{chosen['no_film_voltage_mv']:g}")
+                self._update_measured_note()
+                self.update_analysis()
+                return
+        # Nothing usable was chosen, so stay on whatever was in use before.
+        if self.imported_measurements is None:
+            self.measured_source_var.set(MEASURED_BUILTIN)
+        self._update_measured_note()
+
+    def _update_measured_note(self):
+        if self._using_imported():
+            imported = self.imported_measurements
+            text = imported["summary"]
+            if imported.get("no_film_voltage_mv") is not None:
+                text += f"\nNo-film voltage V0 set to {imported['no_film_voltage_mv']:g} mV from the file."
+        else:
+            count = len(self._measured_voltages())
+            text = (f"{count} layer voltage(s) recorded for this material and detector"
+                    if count else "No built-in measurements for this material and detector.")
+        self.measured_note.configure(text=text)
 
     def _material_changed(self, _value=None):
         material = self.materials[self.material_var.get()]
@@ -336,6 +392,7 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
             f"reference film thickness {'unknown' if x_ref is None else f'{x_ref:g} µm'}"))
         if self.mode_var.get() == MODE_ESTIMATE:
             self.value_var.set(self._default_value())
+        self._update_measured_note()
         self._update_setup_note()
 
     def _detector_changed(self):
@@ -359,7 +416,8 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
         self.setup_note.configure(text=(
             f"No-film {self.v0_var.get()} mV · dark {self.vdark_var.get()} mV · "
             f"{self.band_min_var.get()}-{self.band_max_var.get()} nm · "
-            f"{len(self._measured_voltages())} measured layer voltages"))
+            + ("measurements imported from a file" if self._using_imported()
+               else f"{len(self._measured_voltages())} built-in layer voltages")))
 
     def _preset_selected(self, label):
         preset = self.source_presets.get(label)
@@ -413,13 +471,24 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
         self.terms_note.configure(text="")
 
     # ------------------------------------------------------------- analysis
+    def _imported_values(self):
+        """Thicknesses that imported measurements sit at, so the graph can compare them."""
+        if not self._using_imported():
+            return []
+        return [float(value) for value, _voltage in self.imported_measurements["points"]]
+
     def _sweep(self, peak):
-        """Values plotted on the graph: whole layers 1..N, or quarter steps in multiplier mode."""
+        """Values plotted on the graph, always including any imported thicknesses."""
+        imported = self._imported_values()
         if THICKNESS_MODES[self.thickness_mode_var.get()] == REFERENCE_MULTIPLIER:
-            top = max(float(peak or 1.0), 1e-6)
-            return [round(top * i / MIN_SWEEP_POINTS, 10) for i in range(1, MIN_SWEEP_POINTS + 1)]
-        top = min(MAX_SWEEP_POINTS, max(MIN_SWEEP_POINTS, int(math.ceil(float(peak or 1)))))
-        return [float(i) for i in range(1, top + 1)]
+            top = max([float(peak or 1.0)] + imported)
+            values = [round(top * i / MIN_SWEEP_POINTS, 10) for i in range(1, MIN_SWEEP_POINTS + 1)]
+        else:
+            highest = max([float(peak or 1)] + imported)
+            top = min(MAX_SWEEP_POINTS, max(MIN_SWEEP_POINTS, int(math.ceil(highest))))
+            values = [float(i) for i in range(1, top + 1)]
+        merged = sorted(set(values) | {round(value, 10) for value in imported})
+        return merged[:MAX_SWEEP_POINTS * 2]
 
     def _entered_thickness(self):
         """The thickness the user typed, validated against the active thickness mode."""
@@ -463,7 +532,11 @@ class BroadbandAnalysisWindow(ctk.CTkToplevel):
             clamp_negative=self.clamp_var.get(),
             interface_correction=self.interface_var.get(),
             refractive_index=_optional_float(self.index_var.get(), "Refractive index"),
-            measured_voltages_by_layer=self._measured_voltages() if self.compare_var.get() else None,
+            measured_voltages_by_layer=(None if not self.compare_var.get() or self._using_imported()
+                                        else self._measured_voltages()),
+            measured_points=(self.imported_measurements["points"]
+                             if self.compare_var.get() and self._using_imported() else None),
+            measured_source=(self.imported_measurements["source"] if self._using_imported() else ""),
             inspect_value=entered if (entered is not None and entered in values) else None,
             target_voltage_mv=target_voltage,
         )

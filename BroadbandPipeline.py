@@ -71,6 +71,8 @@ class BroadbandConfig:
     interface_correction: bool = False
     refractive_index: Optional[float] = None
     measured_voltages_by_layer: Optional[Dict[int, float]] = None
+    measured_points: Optional[Sequence[tuple]] = None   # [(thickness value, voltage mV)], imported data
+    measured_source: str = ""
     inspect_value: Optional[float] = None
     coverage_threshold: float = DEFAULT_COVERAGE_THRESHOLD
     target_voltage_mv: Optional[float] = None      # inverse mode: measured voltage to convert to a thickness
@@ -179,7 +181,7 @@ def _baseline_decision(setting, wavelength, absorbance, domain):
 
 
 def _thickness_rows(config, reference_thickness_um):
-    """Return [(layer_count|None, thickness_um|None, scale)] and a description."""
+    """Return [(value, layer_count|None, thickness_um|None, scale)] and a description."""
     values = [float(v) for v in config.values]
     if not values:
         raise ValueError("At least one thickness value is required.")
@@ -191,23 +193,24 @@ def _thickness_rows(config, reference_thickness_um):
                              "Use 'Layers × thickness ratio' or 'Reference-sample multiplier' if it is unknown.")
         if not config.layer_thickness_um or config.layer_thickness_um <= 0:
             raise ValueError("Physical thickness mode needs a positive layer thickness (µm).")
-        rows = [(v, v * config.layer_thickness_um, v * config.layer_thickness_um / reference_thickness_um) for v in values]
+        rows = [(v, v, v * config.layer_thickness_um, v * config.layer_thickness_um / reference_thickness_um)
+                for v in values]
         desc = (f"x = layers × {config.layer_thickness_um:g} µm; scale = x / x_ref with x_ref = {reference_thickness_um:g} µm")
     elif config.thickness_mode == LAYERS_RATIO:
         ratio = config.layer_to_reference_ratio
         if ratio is None or ratio <= 0:
             raise ValueError("Layer thickness ratio t_layer / x_ref must be positive.")
-        rows = [(v, None, v * ratio) for v in values]
+        rows = [(v, v, None, v * ratio) for v in values]
         desc = (f"scale = layers × {ratio:g} (ASSUMED t_layer / x_ref ratio; x_ref unknown, so no µm are reported)")
     elif config.thickness_mode == REFERENCE_MULTIPLIER:
-        rows = [(None, None, v) for v in values]
+        rows = [(v, None, None, v) for v in values]
         desc = "scale = equivalent number of reference samples (no µm, no layer matching)"
     else:
         raise ValueError(f"Unknown thickness mode {config.thickness_mode!r}.")
-    for layer_count, _thickness, _scale in rows:
+    for _value, layer_count, _thickness, _scale in rows:
         if layer_count is not None and not float(layer_count).is_integer():
             raise ValueError("Layer counts must be whole numbers; use the multiplier mode for fractional values.")
-    return [(None if n is None else int(n), x, s) for n, x, s in rows], desc
+    return [(v, None if n is None else int(n), x, s) for v, n, x, s in rows], desc
 
 
 STATUS_NOTES = {
@@ -366,13 +369,22 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
     options = dict(source=source, responsivity=responsivity, multiplicative_terms=terms,
                    wavelength_min=window[0], wavelength_max=window[1], absorbance_mode=convention,
                    dark_voltage_mv=config.dark_voltage_mv, coverage_threshold=config.coverage_threshold)
-    measured_by_layer = {int(k): float(v) for k, v in (config.measured_voltages_by_layer or {}).items()}
+    measured_by_value = [(float(value), float(voltage)) for value, voltage in (config.measured_points or [])]
+    measured_by_layer = {} if measured_by_value else {int(k): float(v)
+                                                      for k, v in (config.measured_voltages_by_layer or {}).items()}
     if measured_by_layer and config.thickness_mode == REFERENCE_MULTIPLIER:
-        warnings.append("Measured data is keyed by layer count and is NOT compared in reference-multiplier mode.")
+        warnings.append("The built-in measured data is keyed by layer count and is NOT compared in "
+                        "reference-multiplier mode. Import measurements from a file to compare here.")
         measured_by_layer = {}
+    unmatched = [value for value, _voltage in measured_by_value
+                 if not any(abs(value - float(v)) <= MATCH_TOLERANCE for v in config.values)]
+    if unmatched:
+        warnings.append(f"{len(unmatched)} imported measurement(s) are not at any analysed thickness "
+                        f"({', '.join(f'{value:g}' for value in unmatched[:6])}"
+                        f"{'…' if len(unmatched) > 6 else ''}) and are not compared.")
 
     rows, raw_spectra, spectra = [], [], []
-    for layer_count, thickness_um, scale in thickness_rows:
+    for value, layer_count, thickness_um, scale in thickness_rows:
         raw = predict_detector_voltage(wavelength, raw_absorbance, config.no_film_voltage_mv, scale, **options)
         interface_total = interface_per_layer ** (layer_count or 0)
         corrected = predict_detector_voltage(wavelength, corrected_absorbance, config.no_film_voltage_mv, scale,
@@ -381,6 +393,7 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
         raw_spectra.append(raw)
         spectra.append(corrected)
         row = {
+            "value": value,
             "layer_count": layer_count, "thickness_um": thickness_um, "thickness_scale": scale,
             "raw_predicted_voltage_mv": raw["predicted_voltage_mv"],
             "raw_effective_transmission": raw["effective_transmission"],
@@ -400,9 +413,12 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
             "error_mv": None, "absolute_error_mv": None, "percent_error": None, "absolute_percent_error": None,
             "raw_error_mv": None, "raw_percent_error": None,
         }
-        # 15. Comparison, only for rows that are genuinely a layer count.
-        if layer_count is not None and layer_count in measured_by_layer:
-            measured_v = measured_by_layer[layer_count]
+        # 15. Comparison: imported points match the value analysed, built-in data the layer count.
+        matched = [voltage for measured_value, voltage in measured_by_value
+                   if abs(measured_value - value) <= MATCH_TOLERANCE]
+        measured_v = matched[0] if matched else (measured_by_layer.get(layer_count)
+                                                 if layer_count is not None else None)
+        if measured_v is not None:
             measured_t = measured_transmission(measured_v, config.no_film_voltage_mv, config.dark_voltage_mv)
             error = row["predicted_voltage_mv"] - measured_v
             raw_error = row["raw_predicted_voltage_mv"] - measured_v
@@ -470,6 +486,11 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
                       "window_nm": window, "weight_domain_nm": domain},
         "voltages": {"no_film_voltage_mv": float(config.no_film_voltage_mv),
                      "dark_voltage_mv": float(config.dark_voltage_mv)},
+        "measured": {"source": config.measured_source or ("imported points" if measured_by_value
+                                                          else "built-in detector dataset"),
+                     "imported": bool(measured_by_value),
+                     "available": len(measured_by_value) or len(measured_by_layer),
+                     "compared": len([row for row in rows if row["measured_voltage_mv"] is not None])},
         "coverage": {"fraction": coverage_fraction, "partial": partial, "threshold": config.coverage_threshold,
                      "material_range_nm": (float(wavelength[0]), float(wavelength[-1])),
                      "covered_range_nm": grid["material_coverage_nm"], "weight_range_nm": grid["integration_range_nm"]},

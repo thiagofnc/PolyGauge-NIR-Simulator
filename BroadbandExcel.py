@@ -111,7 +111,10 @@ def export_broadband_workbook(path, result, experimental_rows=None):
                ("Wavelength window (nm)", weighting["window_nm"]),
                ("Weight domain (nm)", weighting["weight_domain_nm"]),
                ("No-film voltage V0 (mV)", voltages["no_film_voltage_mv"]),
-               ("Dark voltage V_dark (mV)", voltages["dark_voltage_mv"])])
+               ("Dark voltage V_dark (mV)", voltages["dark_voltage_mv"]),
+               ("Measured data source", result["measured"]["source"]),
+               ("Measurements compared", f"{result['measured']['compared']} of "
+                                         f"{result['measured']['available']} available")])
     ws.append([])
     section(ws, "Spectral coverage")
     pairs(ws, [("Coverage fraction", coverage["fraction"]), ("Partial coverage", coverage["partial"]),

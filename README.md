@@ -224,6 +224,18 @@ The visible panel is deliberately small - material, detector, mode, one value,
    per-thickness table plus the full warning wording,
 6. export the workbook.
 
+**Measured data** comes from the built-in `experimental_detector_data.json`
+table or from a file of your own. Choosing *From an Excel/CSV file…* opens the
+workbook in a viewer: drag across the cells holding the thicknesses, press
+*Selection = film layers*, drag across the voltages, press *Selection = measured
+voltage*, and the preview shows the pairs it read before anything is used. A
+header row is skipped, a zero-thickness row is offered as the no-film voltage
+V0, and the analysed sweep grows to cover every imported thickness so each point
+has a prediction to sit against. Misaligned selections are refused rather than
+guessed, and the workbook, sheet and cell ranges are recorded in the export.
+Imported points are matched on the thickness analysed, so fractional thicknesses
+work in reference-multiplier mode.
+
 Everything else - absorbance convention, `x_ref`, thickness mode, V0/V_dark,
 detector weighting, source spectrum, filter CSVs, optional corrections and the
 measured-data comparison - lives behind **Advanced settings**, which is hidden
@@ -233,6 +245,8 @@ raw, uncorrected forward model.
 - `BroadbandAnalysis.py` – physics primitives (no UI or file I/O)
 - `BroadbandPipeline.py` – the full analysis: corrections, weighting, thickness, comparison
 - `SpectralData.py` – loaders for material spectra, responsivity/source/filter CSVs, source presets
+- `MeasurementSheets.py` – reads .xlsx/.csv measurement tables and turns selected cell ranges into points
+- `BroadbandSheetUI.py` – the spreadsheet viewer used to pick those cells
 - `material_spectra.json` – per-material file, quantity and reference thickness `x_ref`
 - `experimental_detector_data.json` – V0, V_dark, flat-band placeholder and measured voltages
 

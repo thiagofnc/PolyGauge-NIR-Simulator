@@ -307,6 +307,43 @@ class ThicknessEstimateTests(unittest.TestCase):
         self.assertIsNone(estimate["layer_equivalent"])
 
 
+class ImportedMeasurementTests(unittest.TestCase):
+    """Measurements imported from a file are matched to the thickness analysed."""
+
+    def test_points_match_the_value_analysed(self):
+        result = run_broadband_analysis(config(measured_points=[(1, 60.0), (3, 30.0)]), synthetic_library(0.2))
+        matched = {row["value"]: row["measured_voltage_mv"] for row in result["rows"]}
+        self.assertEqual(matched, {1.0: 60.0, 2.0: None, 3.0: 30.0, 4.0: None})
+        self.assertEqual(result["metrics"]["n"], 2)
+        self.assertTrue(result["measured"]["imported"])
+        self.assertEqual(result["measured"]["compared"], 2)
+
+    def test_fractional_thicknesses_are_compared_in_multiplier_mode(self):
+        result = run_broadband_analysis(config(thickness_mode=REFERENCE_MULTIPLIER, values=[0.5, 1.5, 2.5],
+                                               measured_points=[(1.5, 45.0)]), synthetic_library(0.2))
+        self.assertEqual(result["rows"][1]["measured_voltage_mv"], 45.0)
+        self.assertEqual(result["metrics"]["n"], 1)
+
+    def test_points_outside_the_sweep_are_reported_not_dropped_silently(self):
+        result = run_broadband_analysis(config(measured_points=[(1, 60.0), (9, 10.0)]), synthetic_library(0.2))
+        self.assertEqual(result["measured"]["available"], 2)
+        self.assertEqual(result["measured"]["compared"], 1)
+        self.assertTrue(any("not at any analysed thickness" in w for w in result["warnings"]))
+
+    def test_imported_points_replace_the_built_in_table(self):
+        result = run_broadband_analysis(config(measured_voltages_by_layer={1: 99.0, 2: 98.0},
+                                               measured_points=[(1, 60.0)]), synthetic_library(0.2))
+        self.assertEqual(result["rows"][0]["measured_voltage_mv"], 60.0)
+        self.assertIsNone(result["rows"][1]["measured_voltage_mv"])
+
+    def test_source_is_carried_into_the_result(self):
+        result = run_broadband_analysis(config(measured_points=[(1, 60.0)], measured_source="book.xlsx [S] A2:A3/B2:B3"),
+                                        synthetic_library(0.2))
+        self.assertEqual(result["measured"]["source"], "book.xlsx [S] A2:A3/B2:B3")
+        default = run_broadband_analysis(config(measured_voltages_by_layer={1: 60.0}), synthetic_library(0.2))
+        self.assertEqual(default["measured"]["source"], "built-in detector dataset")
+
+
 class LoaderTests(unittest.TestCase):
     def test_evoh_loader_converts_fraction_transmission(self):
         entry = {"file": "EVOHTransmissionPercentvsWavelength_in_nm_2000nm_to_5000nm.csv",
@@ -377,6 +414,9 @@ class ExportTests(unittest.TestCase):
             for i, row in enumerate(result["rows"], start=2):
                 self.assertAlmostEqual(results.cell(row=i, column=predicted_col).value, row["predicted_voltage_mv"], places=9)
             self.assertIn("PARTIAL SPECTRAL COVERAGE", str(wb["Summary"]["A4"].value))
+            summary = {row[0].value: row[1].value for row in wb["Summary"].iter_rows(min_col=1, max_col=2)
+                       if row[0].value}
+            self.assertEqual(summary["Measured data source"], "built-in detector dataset")
             self.assertEqual(wb["Spectral Calculation"].max_row, len(result["grid"]["wavelength_nm"]) + 1)
             self.assertEqual(len(wb["Charts"]._charts), 7)
 
@@ -411,6 +451,7 @@ class UiConsistencyTests(unittest.TestCase):
         import customtkinter as ctk
         import BroadbandUI
 
+        self.ui = BroadbandUI
         self.errors = []
         self._original = messagebox.showerror
         messagebox.showerror = lambda title, message, **kw: self.errors.append(message)
@@ -544,6 +585,61 @@ class UiConsistencyTests(unittest.TestCase):
         window.value_var.set("2.5")
         window.update_analysis()
         self.assertTrue(any("whole numbers" in message for message in self.errors))
+
+    def test_importing_measurements_from_a_sheet(self):
+        from BroadbandSheetUI import ROLE_THICKNESS, ROLE_VOLTAGE, SheetRangeDialog
+        window = self.window
+        with tempfile.TemporaryDirectory() as tmp:
+            from openpyxl import Workbook
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Runs"
+            for row in [["Layers", "Voltage (mV)"], [0, 498], [1, 470], [2, 450], [5, 400]]:
+                sheet.append(row)
+            path = os.path.join(tmp, "runs.xlsx")
+            workbook.save(path)
+
+            dialog = SheetRangeDialog(window, path, "film layers")
+            try:
+                self.assertEqual(dialog.sheet_name, "Runs")
+                dialog.ranges[ROLE_THICKNESS] = (1, 0, 4, 0)   # A2:A5
+                dialog.ranges[ROLE_VOLTAGE] = (1, 1, 4, 1)     # B2:B5
+                parsed, error = dialog.parsed()
+                self.assertIsNone(error)
+                self.assertEqual(parsed["points"], [(1.0, 470.0), (2.0, 450.0), (5.0, 400.0)])
+                self.assertEqual(parsed["no_film_voltage_mv"], 498.0)
+                dialog._confirm()
+                chosen = dialog.result
+            finally:
+                if dialog.winfo_exists():
+                    dialog.destroy()
+            self.assertIn("runs.xlsx [Runs] A2:A5 / B2:B5", chosen["source"])
+
+            window.imported_measurements = chosen
+            window.measured_source_var.set(self.ui.MEASURED_FILE)
+            window.v0_var.set(f"{chosen['no_film_voltage_mv']:g}")
+            window.update_analysis()
+
+        self.assertEqual(self.errors, [])
+        self.assertTrue(window.result["measured"]["imported"])
+        matched = {row["value"]: row["measured_voltage_mv"] for row in window.result["rows"]}
+        self.assertEqual(matched[1.0], 470.0)
+        self.assertEqual(matched[5.0], 400.0)      # the sweep grew to reach the imported point
+        self.assertEqual(window.result["voltages"]["no_film_voltage_mv"], 498.0)
+        self.assertEqual(window.result["metrics"]["n"], 3)
+
+    def test_reverting_to_built_in_measurements(self):
+        window = self.window
+        window.imported_measurements = {"points": [(1.0, 470.0)], "source": "x.xlsx [S] A1/B1",
+                                        "no_film_voltage_mv": None, "summary": "1 point(s) from x.xlsx",
+                                        "skipped_rows": 0}
+        window.measured_source_var.set(self.ui.MEASURED_FILE)
+        window.update_analysis()
+        self.assertTrue(window.result["measured"]["imported"])
+        window._measured_source_changed(self.ui.MEASURED_BUILTIN)
+        self.assertIsNone(window.imported_measurements)
+        self.assertFalse(window.result["measured"]["imported"])
+        self.assertEqual(self.errors, [])
 
     def test_advanced_and_details_panes_toggle(self):
         window = self.window
