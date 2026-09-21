@@ -340,3 +340,71 @@ def agreement_metrics(measured: Sequence[float], predicted: Sequence[float]):
     if measured.size >= 2 and denominator > 0:
         metrics["r_squared"] = float(1.0 - np.sum(residual ** 2) / denominator)
     return metrics
+
+
+# Bisection is used instead of a closed-form inverse because T_effective is a
+# weighted integral of 10^(-A(lambda)*scale): it has no analytic inverse, but it
+# IS strictly decreasing in scale, so a bracket plus bisection is exact to
+# machine precision and cannot converge to a spurious root.
+DEFAULT_MAX_THICKNESS_SCALE = 1000.0
+
+
+def solve_thickness_scale(transmission_of_scale, target_transmission,
+                          max_scale=DEFAULT_MAX_THICKNESS_SCALE, tolerance=1e-10, max_iterations=200):
+    """Invert a monotonically decreasing T(scale) for the thickness scale x / x_ref.
+
+    ``transmission_of_scale`` must be the SAME forward model used for
+    prediction, evaluated at an arbitrary (fractional) scale.  Returns a
+    mapping with ``thickness_scale``, the transmission actually reached, the
+    final bracket and a ``status``:
+
+    * ``ok`` - a bracket was found and bisected to ``tolerance``.
+    * ``at_or_above_no_film`` - the target transmission is >= T(0); the film
+      cannot be thinner than zero, so the scale is reported as 0.
+    * ``exceeds_max_scale`` - even at ``max_scale`` the model transmits more
+      than the target; the scale is a lower bound, not an estimate.
+    """
+    target = float(target_transmission)
+    if not math.isfinite(target):
+        raise ValueError("Target transmission must be a finite number.")
+    if target <= 0:
+        raise ValueError("Target transmission must be greater than zero "
+                         "(the measured voltage is at or below the dark voltage).")
+    if max_scale <= 0:
+        raise ValueError("The maximum thickness scale must be positive.")
+
+    def evaluate(scale):
+        # Absorbance that is negative anywhere makes T(lambda) = 10^(-A*scale) overflow at
+        # large scales; an overflow means "transmits far more than the target", never a root.
+        value = float(transmission_of_scale(scale))
+        return math.inf if not math.isfinite(value) else value
+
+    t_zero = evaluate(0.0)
+    if target >= t_zero:
+        return {"thickness_scale": 0.0, "transmission": t_zero, "target_transmission": target,
+                "status": "at_or_above_no_film", "converged": False, "iterations": 0, "bracket": (0.0, 0.0)}
+
+    lower, upper = 0.0, 1.0
+    t_upper = evaluate(upper)
+    while t_upper > target:
+        if upper >= max_scale:
+            return {"thickness_scale": float(max_scale), "transmission": t_upper, "target_transmission": target,
+                    "status": "exceeds_max_scale", "converged": False, "iterations": 0,
+                    "bracket": (float(max_scale), math.inf)}
+        lower = upper
+        upper = min(upper * 2.0, max_scale)
+        t_upper = evaluate(upper)
+
+    iterations = 0
+    while iterations < max_iterations and (upper - lower) > tolerance * max(1.0, upper):
+        middle = 0.5 * (lower + upper)
+        if evaluate(middle) > target:
+            lower = middle
+        else:
+            upper = middle
+        iterations += 1
+    scale = 0.5 * (lower + upper)
+    return {"thickness_scale": float(scale), "transmission": evaluate(scale),
+            "target_transmission": target, "status": "ok",
+            "converged": bool((upper - lower) <= tolerance * max(1.0, upper)),
+            "iterations": iterations, "bracket": (float(lower), float(upper))}

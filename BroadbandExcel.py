@@ -122,6 +122,8 @@ def export_broadband_workbook(path, result, experimental_rows=None):
     ws.append([])
     section(ws, "Optional corrections")
     pairs(ws, [("Baseline subtraction", corrections["baseline_enabled"]),
+               ("Baseline setting", corrections["baseline_mode"]),
+               ("Baseline decision", corrections["baseline_reason"]),
                ("Baseline offset subtracted (A)", corrections["baseline_offset"]),
                ("Negative clamp", corrections["clamp_enabled"]),
                ("Points clamped", f"{corrections['clamped_points']} ({corrections['clamped_percent']:.1f}%)"),
@@ -130,6 +132,23 @@ def export_broadband_workbook(path, result, experimental_rows=None):
                ("Interface T per layer", corrections["interface_per_layer"]),
                ("Interface assumptions", corrections["interface_assumptions"])])
     ws.append([])
+
+    estimate = result.get("estimate")
+    if estimate:
+        section(ws, "Thickness estimate from a measured voltage")
+        pairs(ws, [("Measured voltage (mV)", estimate["target_voltage_mv"]),
+                   ("Measured effective transmission", estimate["target_transmission"]),
+                   ("Estimated x / x_ref", estimate["thickness_scale"]),
+                   ("Estimated layers", estimate["layer_equivalent"]),
+                   ("Estimated thickness x (µm)", estimate["thickness_um"] or "UNKNOWN (x_ref not recorded)"),
+                   ("x / x_ref bounds from spectral coverage", estimate["thickness_scale_bounds"]),
+                   ("Thickness bounds (µm)", estimate["thickness_um_bounds"]),
+                   ("Solver", f"bisection of the same forward model, {estimate['iterations']} iterations, "
+                              f"converged={estimate['converged']}, status={estimate['status']}"),
+                   ("Back-predicted voltage (mV)", estimate["back_predicted_voltage_mv"]),
+                   ("Residual vs measured (mV)", estimate["residual_mv"]),
+                   ("Note", estimate["status_note"] or "Solved inside the bracketed range.")])
+        ws.append([])
 
     section(ws, "Model agreement metrics")
     ws.append(["Metric", "Raw model", "Corrected model"])

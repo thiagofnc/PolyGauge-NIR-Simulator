@@ -7,7 +7,8 @@ import numpy as np
 
 from BroadbandAnalysis import (absorbance_to_transmission, agreement_metrics, calculate_weighted_transmission,
                                dark_corrected_voltage, estimate_baseline_offset, fresnel_layer_transmission,
-                               measured_transmission, predict_detector_voltage, thickness_scale)
+                               measured_transmission, predict_detector_voltage, solve_thickness_scale,
+                               thickness_scale)
 
 
 class AbsorbanceConversionTests(unittest.TestCase):
@@ -159,6 +160,52 @@ class CorrectionAndMetricTests(unittest.TestCase):
 
     def test_fresnel_loss(self):
         self.assertAlmostEqual(fresnel_layer_transmission(1.5), 0.96 ** 2)
+
+
+class ThicknessSolverTests(unittest.TestCase):
+    """The inverse model must invert the forward model exactly, not approximately."""
+
+    def setUp(self):
+        self.wl = np.linspace(2000.0, 3000.0, 201)
+        self.absorbance = np.full_like(self.wl, 0.3)
+
+    def forward(self, scale):
+        return predict_detector_voltage(self.wl, self.absorbance, 100.0, scale)["effective_transmission"]
+
+    def test_round_trip_recovers_the_thickness_scale(self):
+        for expected in (0.25, 1.0, 2.5, 7.0):
+            solution = solve_thickness_scale(self.forward, self.forward(expected))
+            self.assertEqual(solution["status"], "ok")
+            self.assertTrue(solution["converged"])
+            self.assertAlmostEqual(solution["thickness_scale"], expected, places=6)
+
+    def test_structured_spectrum_round_trip(self):
+        # A wavelength-dependent spectrum: T_eff is an integral with no closed-form inverse.
+        self.absorbance = 0.1 + 0.9 * np.exp(-((self.wl - 2400.0) / 80.0) ** 2)
+        solution = solve_thickness_scale(self.forward, self.forward(3.3))
+        self.assertAlmostEqual(solution["thickness_scale"], 3.3, places=6)
+
+    def test_transmission_at_or_above_no_film_reports_zero_thickness(self):
+        solution = solve_thickness_scale(self.forward, 1.0)
+        self.assertEqual(solution["status"], "at_or_above_no_film")
+        self.assertEqual(solution["thickness_scale"], 0.0)
+
+    def test_target_below_reachable_range_is_flagged_not_guessed(self):
+        solution = solve_thickness_scale(self.forward, 1e-12, max_scale=4.0)
+        self.assertEqual(solution["status"], "exceeds_max_scale")
+        self.assertEqual(solution["thickness_scale"], 4.0)
+        self.assertFalse(solution["converged"])
+
+    def test_non_physical_targets_are_rejected(self):
+        for target in (0.0, -0.2, float("nan")):
+            with self.assertRaises(ValueError):
+                solve_thickness_scale(self.forward, target)
+
+    def test_solution_is_consistent_with_measured_transmission(self):
+        voltage = 100.0 * self.forward(2.0)
+        solution = solve_thickness_scale(self.forward, measured_transmission(voltage, 100.0, 0.0))
+        self.assertAlmostEqual(solution["thickness_scale"], 2.0, places=6)
+        self.assertAlmostEqual(dark_corrected_voltage(solution["transmission"], 100.0), voltage, places=6)
 
 
 if __name__ == "__main__":

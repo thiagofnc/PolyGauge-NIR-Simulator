@@ -13,9 +13,10 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
-from BroadbandAnalysis import (DEFAULT_COVERAGE_THRESHOLD, agreement_metrics, blackbody_relative_spectrum,
-                               estimate_baseline_offset, fresnel_layer_transmission, measured_transmission,
-                               predict_detector_voltage, weighting_domain)
+from BroadbandAnalysis import (DEFAULT_COVERAGE_THRESHOLD, DEFAULT_MAX_THICKNESS_SCALE, agreement_metrics,
+                               blackbody_relative_spectrum, dark_corrected_voltage, estimate_baseline_offset,
+                               fresnel_layer_transmission, measured_transmission, predict_detector_voltage,
+                               solve_thickness_scale, weighting_domain)
 
 # Thickness input modes
 LAYERS_PHYSICAL = "layers_physical"          # x = n * t_layer, scale = x / x_ref  (reports µm)
@@ -24,6 +25,15 @@ REFERENCE_MULTIPLIER = "reference_multiplier"  # scale given directly (no µm, n
 
 DETECTOR_FLAT_BAND = "flat_band"
 DETECTOR_RESPONSIVITY = "responsivity_curve"
+
+BASELINE_OFF = "off"
+BASELINE_AUTO = "auto"
+BASELINE_ON = "on"
+
+# A transparent region sitting this far below zero absorbance cannot be real: it
+# makes T = 10^(-A) exceed 1, so the film would amplify light. Anything smaller
+# is treated as ordinary measurement noise and left alone.
+BASELINE_AUTO_TOLERANCE = 0.002
 
 SOURCE_FLAT = "flat"
 SOURCE_BLACKBODY = "blackbody"
@@ -56,13 +66,15 @@ class BroadbandConfig:
     source_spectrum: Optional[dict] = None              # {"wavelength_nm", "values", "note"}
     optical_terms: List[dict] = field(default_factory=list)
     absorbance_convention: Optional[str] = None          # None = material metadata
-    baseline_correction: bool = False
+    baseline_correction: object = BASELINE_AUTO   # "auto" (only if needed), "on"/True, "off"/False
     clamp_negative: bool = False
     interface_correction: bool = False
     refractive_index: Optional[float] = None
     measured_voltages_by_layer: Optional[Dict[int, float]] = None
     inspect_value: Optional[float] = None
     coverage_threshold: float = DEFAULT_COVERAGE_THRESHOLD
+    target_voltage_mv: Optional[float] = None      # inverse mode: measured voltage to convert to a thickness
+    max_thickness_scale: float = DEFAULT_MAX_THICKNESS_SCALE
 
 
 def _curve(spec, name):
@@ -118,6 +130,54 @@ def _min_optional(a, b):
     return min(values) if values else None
 
 
+def _scale_per_layer(config, reference_thickness_um):
+    """x / x_ref added by ONE layer, or None when layers are not meaningful."""
+    if config.thickness_mode == LAYERS_PHYSICAL:
+        if not config.layer_thickness_um or not reference_thickness_um:
+            return None
+        return float(config.layer_thickness_um) / float(reference_thickness_um)
+    if config.thickness_mode == LAYERS_RATIO:
+        ratio = config.layer_to_reference_ratio
+        return None if not ratio else float(ratio)
+    return None
+
+
+def _baseline_setting(value):
+    """Accept "off"/"auto"/"on" as well as the plain booleans."""
+    if value is True:
+        return BASELINE_ON
+    if value is False or value is None:
+        return BASELINE_OFF
+    text = str(value).strip().lower()
+    if text not in (BASELINE_OFF, BASELINE_AUTO, BASELINE_ON):
+        raise ValueError(f"Baseline correction must be 'off', 'auto' or 'on' (got {value!r}).")
+    return text
+
+
+def _baseline_decision(setting, wavelength, absorbance, domain):
+    """Decide whether to subtract a baseline offset, and say why.
+
+    In ``auto`` the offset is subtracted ONLY when the in-band baseline is
+    negative, i.e. when the spectrum claims the film transmits more than 100 %.
+    A positive baseline is never removed automatically: for a genuinely
+    absorbing material that would silently delete real absorption.
+    """
+    offset = estimate_baseline_offset(wavelength, absorbance, *domain)
+    if setting == BASELINE_OFF:
+        return 0.0, False, f"Not applied (turned off). In-band baseline is {offset:+.4f} A."
+    if setting == BASELINE_ON:
+        return offset, True, f"Applied because baseline correction is forced on: {offset:+.4f} A subtracted."
+    if offset < -BASELINE_AUTO_TOLERANCE:
+        return offset, True, (f"Applied automatically: the transparent part of the spectrum sits {offset:+.4f} A "
+                              f"below zero, which would make the film transmit more than 100 %. "
+                              f"That offset was subtracted; the absorption peaks are untouched.")
+    if offset > BASELINE_AUTO_TOLERANCE:
+        return 0.0, False, (f"Not applied: the in-band baseline is {offset:+.4f} A, i.e. positive. It is left alone "
+                            f"because subtracting it could remove real absorption. Force it on if the spectrum is "
+                            f"known to have an additive offset.")
+    return 0.0, False, f"Not applied: the in-band baseline is already {offset:+.4f} A, within noise of zero."
+
+
 def _thickness_rows(config, reference_thickness_um):
     """Return [(layer_count|None, thickness_um|None, scale)] and a description."""
     values = [float(v) for v in config.values]
@@ -150,6 +210,85 @@ def _thickness_rows(config, reference_thickness_um):
     return [(None if n is None else int(n), x, s) for n, x, s in rows], desc
 
 
+STATUS_NOTES = {
+    "at_or_above_no_film": ("The measured voltage is at or above the predicted no-film voltage, so the model needs "
+                            "zero thickness to explain it. Reported thickness is 0 (an upper limit, not a fit)."),
+    "exceeds_max_scale": ("The measured voltage is darker than the model reaches even at the maximum thickness scale. "
+                          "The reported thickness is a LOWER limit, not a fit."),
+}
+
+
+def _forward_at_scale(scale, wavelength, absorbance, config, options, interface_per_layer, scale_per_layer):
+    """One evaluation of the forward model at an arbitrary (fractional) scale."""
+    layers = None if not scale_per_layer else float(scale) / float(scale_per_layer)
+    interface = interface_per_layer ** layers if (config.interface_correction and layers is not None) else 1.0
+    return predict_detector_voltage(wavelength, absorbance, config.no_film_voltage_mv, float(scale),
+                                    clamp_negative=config.clamp_negative, interface_transmission=interface,
+                                    **options)
+
+
+def _estimate_thickness(config, wavelength, absorbance, options, interface_per_layer, scale_per_layer,
+                        reference_thickness_um, negative, warnings):
+    """Invert the forward model for the thickness that reproduces a measured voltage."""
+    target_voltage = float(config.target_voltage_mv)
+    if negative["mean_absorbance"] is not None and negative["mean_absorbance"] < 0 and not config.clamp_negative:
+        # T(lambda) = 10^(-A*scale) GROWS with thickness wherever A < 0, so the modelled
+        # voltage is not monotonic and a measured voltage can have several solutions.
+        warnings.append(f"THICKNESS ESTIMATE: the spectrum used is net negative over the band "
+                        f"({negative['mean_absorbance']:+.4f} mean absorbance), so predicted voltage is not "
+                        f"monotonic in thickness and the inverse may not be unique. The reported thickness is the "
+                        f"first solution found while doubling the thickness; enable the negative-absorbance clamp "
+                        f"for a monotonic model.")
+    target_t = measured_transmission(target_voltage, config.no_film_voltage_mv, config.dark_voltage_mv)
+    if target_t <= 0:
+        raise ValueError(f"Measured voltage {target_voltage:g} mV is at or below the dark voltage "
+                         f"{config.dark_voltage_mv:g} mV, so no thickness can explain it.")
+
+    def predict(scale):
+        return _forward_at_scale(scale, wavelength, absorbance, config, options, interface_per_layer, scale_per_layer)
+
+    solution = solve_thickness_scale(lambda s: predict(s)["effective_transmission"], target_t,
+                                     max_scale=config.max_thickness_scale)
+    scale = solution["thickness_scale"]
+    prediction = predict(scale)
+    if solution["status"] in STATUS_NOTES:
+        warnings.append("THICKNESS ESTIMATE: " + STATUS_NOTES[solution["status"]])
+
+    scale_bounds = (scale, scale)
+    if prediction["partial_coverage"]:
+        # Uncovered weight transmitting 0 (thinnest film that fits) or 1 (thickest).
+        thin = solve_thickness_scale(lambda s: predict(s)["effective_transmission_bounds"][0], target_t,
+                                     max_scale=config.max_thickness_scale)
+        thick = solve_thickness_scale(lambda s: predict(s)["effective_transmission_bounds"][1], target_t,
+                                      max_scale=config.max_thickness_scale)
+        scale_bounds = (thin["thickness_scale"],
+                        None if thick["status"] == "exceeds_max_scale" else thick["thickness_scale"])
+
+    def to_um(value):
+        return None if (value is None or not reference_thickness_um) else value * float(reference_thickness_um)
+
+    def to_layers(value):
+        return None if (value is None or not scale_per_layer) else value / float(scale_per_layer)
+
+    return {
+        "target_voltage_mv": target_voltage, "target_transmission": target_t,
+        "thickness_scale": scale, "thickness_scale_bounds": scale_bounds,
+        "layer_equivalent": to_layers(scale),
+        "layer_equivalent_bounds": (to_layers(scale_bounds[0]), to_layers(scale_bounds[1])),
+        "thickness_um": to_um(scale), "thickness_um_bounds": (to_um(scale_bounds[0]), to_um(scale_bounds[1])),
+        "scale_per_layer": scale_per_layer, "reference_thickness_um": reference_thickness_um,
+        "spectral_transmission": prediction["spectral_transmission"],
+        "interface_transmission": prediction["interface_transmission"],
+        "effective_transmission": prediction["effective_transmission"],
+        "back_predicted_voltage_mv": prediction["predicted_voltage_mv"],
+        "residual_mv": prediction["predicted_voltage_mv"] - target_voltage,
+        "coverage_fraction": prediction["coverage_fraction"], "partial_coverage": prediction["partial_coverage"],
+        "status": solution["status"], "status_note": STATUS_NOTES.get(solution["status"]),
+        "converged": solution["converged"], "iterations": solution["iterations"],
+        "max_thickness_scale": float(config.max_thickness_scale),
+    }
+
+
 def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_dir=None):
     """Run the complete forward model and comparison.  See module docstring."""
     if material_library is None:
@@ -175,21 +314,29 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
                               fallback_range=(wavelength[0], wavelength[-1]))
     in_domain = (wavelength >= domain[0]) & (wavelength <= domain[1])
 
-    # Negative absorbance within the ACTIVE region.
-    raw_in_domain = raw_absorbance[in_domain]
-    negative = {"points": int(np.sum(raw_in_domain < 0)), "total_points": int(raw_in_domain.size),
-                "percent": float(100 * np.mean(raw_in_domain < 0)) if raw_in_domain.size else 0.0,
-                "min_absorbance": float(np.min(raw_in_domain)) if raw_in_domain.size else None}
-    if negative["points"]:
-        warnings.append(f"{negative['points']} of {negative['total_points']} absorbance points "
-                        f"({negative['percent']:.1f}%) in the active {domain[0]:.0f}-{domain[1]:.0f} nm region are negative "
-                        f"(min {negative['min_absorbance']:.4f}). Uncorrected, these raise transmission above 1.")
-
-    # 3-4. Optional corrections (explicit and reported).
-    baseline_offset = 0.0
-    if config.baseline_correction:
-        baseline_offset = estimate_baseline_offset(wavelength, raw_absorbance, *domain)
+    # 3-4. Baseline: subtracted when the data needs it, and always reported.
+    baseline_setting = _baseline_setting(config.baseline_correction)
+    baseline_offset, baseline_applied, baseline_reason = _baseline_decision(baseline_setting, wavelength,
+                                                                            raw_absorbance, domain)
     corrected_absorbance = raw_absorbance - baseline_offset
+    if baseline_applied and baseline_setting == BASELINE_AUTO:
+        warnings.append("BASELINE CORRECTED AUTOMATICALLY: " + baseline_reason)
+
+    # Negative absorbance within the ACTIVE region, measured on the spectrum actually used.
+    raw_in_domain = raw_absorbance[in_domain]
+    used_in_domain = corrected_absorbance[in_domain]
+    negative = {"points": int(np.sum(used_in_domain < 0)), "total_points": int(used_in_domain.size),
+                "percent": float(100 * np.mean(used_in_domain < 0)) if used_in_domain.size else 0.0,
+                "min_absorbance": float(np.min(used_in_domain)) if used_in_domain.size else None,
+                "raw_points": int(np.sum(raw_in_domain < 0)),
+                "raw_percent": float(100 * np.mean(raw_in_domain < 0)) if raw_in_domain.size else 0.0,
+                "raw_min_absorbance": float(np.min(raw_in_domain)) if raw_in_domain.size else None,
+                "mean_absorbance": float(np.mean(used_in_domain)) if used_in_domain.size else None}
+    if negative["mean_absorbance"] is not None and negative["mean_absorbance"] < 0 and not config.clamp_negative:
+        warnings.append(f"The spectrum used averages {negative['mean_absorbance']:+.4f} absorbance across the active "
+                        f"{domain[0]:.0f}-{domain[1]:.0f} nm region, i.e. it is net NEGATIVE, so the model makes the "
+                        f"film transmit more than 100 %. Predictions from it are not physical.")
+
     clamped_points = int(np.sum(corrected_absorbance[in_domain] < 0)) if config.clamp_negative else 0
     interface_per_layer = 1.0
     reference_thickness_um = config.reference_thickness_um or material.get("reference_thickness_um")
@@ -201,8 +348,10 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
             raise ValueError("Interface correction is applied per physical layer and needs a layer-count mode.")
         interface_per_layer = fresnel_layer_transmission(config.refractive_index)
     corrections = {
-        "baseline_enabled": config.baseline_correction, "baseline_offset": baseline_offset,
-        "baseline_method": "5th percentile of in-band absorbance subtracted" if config.baseline_correction else None,
+        "baseline_enabled": baseline_applied, "baseline_offset": baseline_offset,
+        "baseline_mode": baseline_setting, "baseline_reason": baseline_reason,
+        "baseline_automatic": bool(baseline_applied and baseline_setting == BASELINE_AUTO),
+        "baseline_method": "5th percentile of in-band absorbance subtracted" if baseline_applied else None,
         "clamp_enabled": config.clamp_negative, "clamped_points": clamped_points,
         "clamped_percent": 100.0 * clamped_points / max(1, int(np.sum(in_domain))),
         "interface_enabled": config.interface_correction, "refractive_index": config.refractive_index,
@@ -211,7 +360,7 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
                                   "wavelength-independent n; no multiple reflections or interference."
                                   if config.interface_correction else None),
     }
-    corrections["any_enabled"] = bool(config.baseline_correction or config.clamp_negative or config.interface_correction)
+    corrections["any_enabled"] = bool(baseline_applied or config.clamp_negative or config.interface_correction)
 
     # 9-14. Per thickness: scaling, transmission, weighted integration, interface, dark voltage.
     options = dict(source=source, responsivity=responsivity, multiplicative_terms=terms,
@@ -267,6 +416,16 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
             })
         rows.append(row)
 
+    # 15b. A film cannot brighten the detector: say so plainly if the model does.
+    voltages_by_scale = [(row["thickness_scale"], row["predicted_voltage_mv"]) for row in rows]
+    rising = [b for (scale_a, a), (scale_b, b) in zip(voltages_by_scale, voltages_by_scale[1:])
+              if scale_b > scale_a and b > a * (1 + 1e-9)]
+    if rising:
+        warnings.insert(0, "PREDICTED VOLTAGE RISES WITH THICKNESS, which is physically impossible for an absorbing "
+                           "film. The spectrum's baseline sits below zero over the detector band, so the model "
+                           "transmits more than 100 %. Turn the baseline correction to 'automatic' or 'always', or "
+                           "clamp negative absorbance, under Advanced settings.")
+
     # 16. Metrics.
     compared = [row for row in rows if row["measured_voltage_mv"] is not None]
     measured_values = [row["measured_voltage_mv"] for row in compared]
@@ -286,6 +445,13 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
         if not matches:
             raise ValueError(f"Inspected value {config.inspect_value:g} is not one of the simulated values.")
         inspected_index = matches[0]
+
+    # 17. Inverse mode: the SAME forward model solved for the thickness scale.
+    estimate = None
+    if config.target_voltage_mv is not None:
+        estimate = _estimate_thickness(config, wavelength, corrected_absorbance, options, interface_per_layer,
+                                       _scale_per_layer(config, reference_thickness_um), reference_thickness_um,
+                                       negative, warnings)
 
     grid = spectra[0]
     return {
@@ -316,7 +482,7 @@ def run_broadband_analysis(config: BroadbandConfig, material_library=None, base_
                  "optical_terms_product": (np.prod(grid["multiplicative_terms"], axis=0)
                                            if grid["multiplicative_terms"] else None),
                  "weight": grid["weight"]},
-        "rows": rows, "spectra": spectra, "raw_spectra": raw_spectra,
+        "rows": rows, "spectra": spectra, "raw_spectra": raw_spectra, "estimate": estimate,
         "metrics": metrics, "raw_metrics": raw_metrics,
         "inspected_index": inspected_index, "warnings": warnings,
     }

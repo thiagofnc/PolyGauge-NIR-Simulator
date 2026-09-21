@@ -208,6 +208,28 @@ The separate **Broadband Analysis / Export** window is a thin UI over one shared
 pipeline, `run_broadband_analysis(config)` in `BroadbandPipeline.py`. The UI,
 graphs and Excel export only display its result.
 
+The visible panel is deliberately small - material, detector, mode, one value,
+*ANALYZE* and *Export to Excel*:
+
+1. pick the **material**,
+2. pick the **detector** (its V0, V_dark and band load automatically),
+3. pick the **mode** - *Predict voltage* (enter a thickness) or *Estimate
+   thickness* (enter a measured voltage),
+4. enter the value and analyse,
+5. read the headline answer, the one-line context under it and the graph
+   (measured points are drawn on every thickness graph, so there is one
+   *Voltage vs thickness* view rather than separate predicted and
+   measured-vs-predicted ones); *How is this calculated?* expands a
+   step-by-step walk-through of that exact number, and *Numbers* opens the
+   per-thickness table plus the full warning wording,
+6. export the workbook.
+
+Everything else - absorbance convention, `x_ref`, thickness mode, V0/V_dark,
+detector weighting, source spectrum, filter CSVs, optional corrections and the
+measured-data comparison - lives behind **Advanced settings**, which is hidden
+until it is opened. The defaults there are the detector's own values plus the
+raw, uncorrected forward model.
+
 - `BroadbandAnalysis.py` – physics primitives (no UI or file I/O)
 - `BroadbandPipeline.py` – the full analysis: corrections, weighting, thickness, comparison
 - `SpectralData.py` – loaders for material spectra, responsivity/source/filter CSVs, source presets
@@ -234,8 +256,33 @@ filter/window transmission CSVs can be multiplied in. If less than 99 % of the
 weight lies inside the material spectrum, results are marked **PARTIAL
 SPECTRAL COVERAGE** with 0–100 % bounds (the EVOH curve covers only 2–5 µm).
 
-Baseline subtraction, negative clamping and Fresnel interface loss are **off
-by default**. When enabled, the offset, clamped-point count and interface factor
+Thickness estimation (*Estimate thickness* mode) is the same forward model
+solved backwards: the measured voltage is converted to `T_eff` with the same
+V0/V_dark, and `solve_thickness_scale` brackets and bisects `x / x_ref` using
+`predict_detector_voltage` itself, so a prediction and its inverse agree to
+machine precision. Nothing is fitted or approximated with a straight line. The
+result states its own limits: a voltage at or above the no-film prediction
+reports thickness 0 as an upper limit, a voltage darker than the model can ever
+reach reports a lower limit instead of a number, partial spectral coverage
+brackets the answer, and a spectrum with negative in-band absorbance is flagged
+as non-monotonic (the inverse may then have several solutions - enable the
+negative clamp for a monotonic model).
+
+Baseline correction defaults to **automatic**: the in-band baseline (5th
+percentile of absorbance over the detector band) is subtracted **only when it is
+negative**, because a negative baseline means the spectrum claims the film
+transmits more than 100 % and the predicted voltage then *rises* with thickness.
+A positive baseline is never removed automatically - for a genuinely absorbing
+material that would silently delete real absorption - and an offset within
+±0.002 A of zero is treated as noise and left alone. Whatever it decides, the
+decision, the offset and the reason are reported on screen, in the Numbers pane
+and in the workbook, and the graph keeps the uncorrected curve alongside the
+corrected one. The bundled PE and Nylon FTIR logs need this: PE's baseline sits
+at −0.0345 A, which without correction predicts 526 → 626 mV across 1-4 layers
+instead of 486 → 456 mV. `off` and `on` are available under Advanced settings.
+If a prediction still rises with thickness, the result says so outright.
+
+Negative clamping and Fresnel interface loss are **off by default**. When enabled, the offset, clamped-point count and interface factor
 are reported, and raw and corrected predictions are shown side by side.
 No parameter is fitted to the measured voltages.
 
